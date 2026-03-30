@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 import database
 import re
+import os
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -318,54 +319,6 @@ class ScheduleBot:
         self.application.run_polling()
 
 if __name__ == "__main__":
-    TOKEN = "8278536077:AAG0GOWYolKbdEmy4sHMWCaa4SRsWfbg6wI"
+    TOKEN = os.environ.get("TOKEN", "8278536077:AAG0GOWYolKbdEmy4sHMWCaa4SRsWfbg6wI")
     bot = ScheduleBot(TOKEN)
-    async def batch_schedule_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["Четная неделя", "Нечетная неделя"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text("Выбери тип недели:", reply_markup=reply_markup)
-    return BATCH_SCHEDULE
-
-async def process_batch_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    
-    if text == "Четная неделя":
-        context.user_data['batch_week_type'] = "even"
-        await update.message.reply_text(
-            "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\n\nКогда закончишь, напиши /done",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return BATCH_SCHEDULE
-    elif text == "Нечетная неделя":
-        context.user_data['batch_week_type'] = "odd"
-        await update.message.reply_text(
-            "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\n\nКогда закончишь, напиши /done",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return BATCH_SCHEDULE
-    elif text == "/done":
-        await update.message.reply_text("✅ Добавление завершено!")
-        context.user_data.clear()
-        return ConversationHandler.END
-    else:
-        lines = text.strip().split('\n')
-        saved = 0
-        week_type = context.user_data.get('batch_week_type', 'even')
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            match = re.match(r'^([А-Яа-я]+)\s+(\d{1,2}:\d{2})\s+(.+)$', line)
-            if match:
-                day_name = match.group(1)
-                time = match.group(2)
-                subject = match.group(3)
-                if day_name in DAYS_EN:
-                    self.db.save_schedule(update.effective_user.id, week_type, DAYS_EN[day_name], subject, time)
-                    saved += 1
-        
-        await update.message.reply_text(f"✅ Сохранено пар: {saved}\nМожешь добавить еще или напиши /done")
-        return BATCH_SCHEDULE
     bot.run()
