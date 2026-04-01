@@ -74,6 +74,12 @@ class ScheduleBot:
             fallbacks=[CommandHandler("cancel", self.cancel)]
         ))
 
+        # Ежечасная проверка дедлайнов
+        try:
+            self.app.job_queue.run_repeating(self.check_deadlines, interval=3600, first=10)
+        except:
+            print("⚠️ JobQueue не настроен, уведомления временно отключены")
+
     async def start(self, update, context):
         self.db.add_user(update.effective_user.id, update.effective_user.username)
         text = """🤖 Бот-помощник для учёбы
@@ -257,11 +263,29 @@ class ScheduleBot:
                 deadline.strftime("%Y-%m-%d %H:%M:%S")
             )
             await update.message.reply_text(f"✅ Добавлено!\nДедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}")
-        except Exception:
-            await update.message.reply_text("❌ Неправильный формат. Пример: 2025-05-20 23:59")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Неправильный формат. Пример: 2025-05-20 23:59")
             return HW_DEADLINE
         context.user_data.clear()
         return ConversationHandler.END
+
+    # ========== ПРОВЕРКА ДЕДЛАЙНОВ ==========
+    async def check_deadlines(self, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            homeworks = self.db.get_homeworks_by_deadline()
+            now = datetime.now()
+            for hw in homeworks:
+                hw_id, user_id, subject, task, deadline_str, is_notified = hw
+                deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M:%S")
+                hours_left = (deadline - now).total_seconds() / 3600
+                if 23 <= hours_left <= 25 and not is_notified:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"⚠️ НАПОМИНАНИЕ!\n\nПредмет: {subject}\nЗадание: {task}\nДедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n\nОстался 1 день!"
+                    )
+                    self.db.mark_notified(hw_id)
+        except Exception as e:
+            print(f"Ошибка проверки дедлайнов: {e}")
 
     async def cancel(self, update, context):
         await update.message.reply_text("❌ Отменено", reply_markup=ReplyKeyboardRemove())
