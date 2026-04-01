@@ -30,7 +30,6 @@ class ScheduleBot:
         self.setup_handlers()
 
     def setup_handlers(self):
-        # Простые команды
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CommandHandler("schedule", self.schedule_today))
         self.app.add_handler(CommandHandler("all_schedule", self.all_schedule))
@@ -75,6 +74,9 @@ class ScheduleBot:
             fallbacks=[CommandHandler("cancel", self.cancel)]
         ))
 
+        # Ежечасная проверка дедлайнов
+        self.app.job_queue.run_repeating(self.check_deadlines, interval=3600, first=10)
+
     # ========== СТАРТ ==========
     async def start(self, update, context):
         self.db.add_user(update.effective_user.id, update.effective_user.username)
@@ -93,11 +95,12 @@ class ScheduleBot:
     async def schedule_today(self, update, context):
         user_id = update.effective_user.id
         weekday = datetime.now().weekday()
-        rows = self.db.get_schedule(user_id, "even", weekday)
+        week_type = "even" if self.is_even_week() else "odd"
+        rows = self.db.get_schedule(user_id, week_type, weekday)
         if not rows:
             await update.message.reply_text("📭 На сегодня пар нет")
         else:
-            msg = f"📚 {DAYS_RU[weekday]}:\n" + "\n".join([f"⏰ {t} - {s}" for s, t in rows])
+            msg = f"📚 {DAYS_RU[weekday]} ({'Четная' if week_type=='even' else 'Нечетная'} неделя):\n" + "\n".join([f"⏰ {t} - {s}" for s, t in rows])
             await update.message.reply_text(msg)
 
     async def all_schedule(self, update, context):
@@ -105,12 +108,22 @@ class ScheduleBot:
         msg = "📖 ПОЛНОЕ РАСПИСАНИЕ\n"
         for wt, wn in [("even", "Четная"), ("odd", "Нечетная")]:
             msg += f"\n◾ {wn} неделя:\n"
+            has_any = False
             for d in range(7):
                 rows = self.db.get_schedule(user_id, wt, d)
                 if rows:
+                    has_any = True
                     msg += f"\n📅 {DAYS_RU[d]}:\n"
                     msg += "\n".join([f"   {t} - {s}" for s, t in rows]) + "\n"
+            if not has_any:
+                msg += "   (нет пар)\n"
         await update.message.reply_text(msg)
+
+    def is_even_week(self):
+        # Простая логика: считаем недели от 1 сентября 2025
+        start = datetime(2025, 9, 1)
+        days = (datetime.now() - start).days
+        return (days // 7) % 2 == 0
 
     # ========== ДОБАВЛЕНИЕ ОДНОЙ ПАРЫ ==========
     async def add_one_start(self, update, context):
@@ -120,7 +133,7 @@ class ScheduleBot:
 
     async def add_one_week(self, update, context):
         context.user_data['week'] = "even" if update.message.text == "Четная неделя" else "odd"
-        kb = [[d] for d in ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]]
+        kb = [[d] for d in DAYS_RU.values()]
         await update.message.reply_text("Выбери день:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
         return DAY
 
@@ -175,6 +188,8 @@ class ScheduleBot:
             if m and m.group(1) in DAYS_EN:
                 self.db.save_schedule(update.effective_user.id, week, DAYS_EN[m.group(1)], m.group(3), m.group(2))
                 saved += 1
+            else:
+                await update.message.reply_text(f"⚠️ Не распознано: {line}")
         await update.message.reply_text(f"✅ Сохранено пар: {saved}\nМожешь добавить ещё или напиши /done")
         return BATCH_ADD
 
@@ -189,7 +204,8 @@ class ScheduleBot:
         context.user_data['delete_list'] = rows
         msg = "🗑 Выбери пару для удаления:\n\n"
         for r in rows:
-            msg += f"{r[0]}. {r[2]} неделя, {DAYS_RU[r[3]]}, {r[5]} - {r[4]}\n"
+            week_name = "Четная" if r[1] == "even" else "Нечетная"
+            msg += f"{r[0]}. {week_name} неделя, {DAYS_RU[r[2]]}, {r[4]} - {r[3]}\n"
         msg += "\nВведи номер пары:"
         await update.message.reply_text(msg)
         return DELETE_CHOOSE
@@ -201,7 +217,7 @@ class ScheduleBot:
                 if r[0] == num:
                     self.db.cursor.execute("DELETE FROM schedule WHERE id = ?", (num,))
                     self.db.conn.commit()
-                    await update.message.reply_text(f"✅ Удалена пара: {r[4]} в {r[5]}")
+                    await update.message.reply_text(f"✅ Удалена пара: {r[3]} в {r[4]}")
                     break
             else:
                 await update.message.reply_text("❌ Пара не найдена")
@@ -242,11 +258,29 @@ class ScheduleBot:
                 deadline.strftime("%Y-%m-%d %H:%M:%S")
             )
             await update.message.reply_text(f"✅ Добавлено!\nДедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}")
-        except:
-            await update.message.reply_text("❌ Неправильный формат. Пример: 2025-05-20 23:59")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Неправильный формат. Пример: 2025-05-20 23:59\nОшибка: {e}")
             return HW_DEADLINE
         context.user_data.clear()
         return ConversationHandler.END
+
+    # ========== ПРОВЕРКА ДЕДЛАЙНОВ ==========
+    async def check_deadlines(self, context: ContextTypes.DEFAULT_TYPE):
+        homeworks = self.db.get_homeworks_by_deadline()
+        now = datetime.now()
+        for hw in homeworks:
+            hw_id, user_id, subject, task, deadline_str, is_notified = hw
+            deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M:%S")
+            hours_left = (deadline - now).total_seconds() / 3600
+            if 23 <= hours_left <= 25 and not is_notified:
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"⚠️ НАПОМИНАНИЕ!\n\nПредмет: {subject}\nЗадание: {task}\nДедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n\nОстался 1 день!"
+                    )
+                    self.db.mark_notified(hw_id)
+                except Exception as e:
+                    print(f"Ошибка уведомления: {e}")
 
     # ========== ОТМЕНА ==========
     async def cancel(self, update, context):
