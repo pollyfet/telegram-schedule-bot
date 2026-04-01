@@ -77,7 +77,6 @@ class ScheduleBot:
         # Ежечасная проверка дедлайнов
         self.app.job_queue.run_repeating(self.check_deadlines, interval=3600, first=10)
 
-    # ========== СТАРТ ==========
     async def start(self, update, context):
         self.db.add_user(update.effective_user.id, update.effective_user.username)
         text = """🤖 Бот-помощник для учёбы
@@ -91,7 +90,6 @@ class ScheduleBot:
 /cancel - отменить действие"""
         await update.message.reply_text(text)
 
-    # ========== ПОКАЗ РАСПИСАНИЯ ==========
     async def schedule_today(self, update, context):
         user_id = update.effective_user.id
         weekday = datetime.now().weekday()
@@ -100,7 +98,8 @@ class ScheduleBot:
         if not rows:
             await update.message.reply_text("📭 На сегодня пар нет")
         else:
-            msg = f"📚 {DAYS_RU[weekday]} ({'Четная' if week_type=='even' else 'Нечетная'} неделя):\n" + "\n".join([f"⏰ {t} - {s}" for s, t in rows])
+            week_name = "Четная" if week_type == "even" else "Нечетная"
+            msg = f"📚 {DAYS_RU[weekday]} ({week_name} неделя):\n" + "\n".join([f"⏰ {t} - {s}" for s, t in rows])
             await update.message.reply_text(msg)
 
     async def all_schedule(self, update, context):
@@ -120,7 +119,6 @@ class ScheduleBot:
         await update.message.reply_text(msg)
 
     def is_even_week(self):
-        # Простая логика: считаем недели от 1 сентября 2025
         start = datetime(2025, 9, 1)
         days = (datetime.now() - start).days
         return (days // 7) % 2 == 0
@@ -166,7 +164,16 @@ class ScheduleBot:
         return BATCH_WEEK
 
     async def batch_week(self, update, context):
-        context.user_data['batch_week'] = "even" if update.message.text == "Четная неделя" else "odd"
+        text = update.message.text
+        if text == "Четная неделя":
+            context.user_data['batch_week'] = "even"
+        elif text == "Нечетная неделя":
+            context.user_data['batch_week'] = "odd"
+        else:
+            # Если пользователь ввел не кнопку, а что-то другое
+            await update.message.reply_text("Пожалуйста, нажми на кнопку 'Четная неделя' или 'Нечетная неделя'")
+            return BATCH_WEEK
+        
         await update.message.reply_text(
             "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\nВторник 12:00 Физика\n\nКогда закончишь, напиши /done",
             reply_markup=ReplyKeyboardRemove()
@@ -184,7 +191,10 @@ class ScheduleBot:
         saved = 0
         week = context.user_data.get('batch_week', 'even')
         for line in lines:
-            m = re.match(r'^([А-Яа-я]+)\s+(\d{1,2}:\d{2})\s+(.+)$', line.strip())
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r'^([А-Яа-я]+)\s+(\d{1,2}:\d{2})\s+(.+)$', line)
             if m and m.group(1) in DAYS_EN:
                 self.db.save_schedule(update.effective_user.id, week, DAYS_EN[m.group(1)], m.group(3), m.group(2))
                 saved += 1
@@ -259,7 +269,7 @@ class ScheduleBot:
             )
             await update.message.reply_text(f"✅ Добавлено!\nДедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}")
         except Exception as e:
-            await update.message.reply_text(f"❌ Неправильный формат. Пример: 2025-05-20 23:59\nОшибка: {e}")
+            await update.message.reply_text(f"❌ Неправильный формат. Пример: 2025-05-20 23:59")
             return HW_DEADLINE
         context.user_data.clear()
         return ConversationHandler.END
@@ -282,13 +292,11 @@ class ScheduleBot:
                 except Exception as e:
                     print(f"Ошибка уведомления: {e}")
 
-    # ========== ОТМЕНА ==========
     async def cancel(self, update, context):
         await update.message.reply_text("❌ Отменено", reply_markup=ReplyKeyboardRemove())
         context.user_data.clear()
         return ConversationHandler.END
 
-    # ========== ЗАПУСК ==========
     def run(self):
         print("✅ Бот запущен!")
         self.app.run_polling()
