@@ -74,9 +74,6 @@ class ScheduleBot:
             fallbacks=[CommandHandler("cancel", self.cancel)]
         ))
 
-        # Ежечасная проверка дедлайнов
-        self.app.job_queue.run_repeating(self.check_deadlines, interval=3600, first=10)
-
     async def start(self, update, context):
         self.db.add_user(update.effective_user.id, update.effective_user.username)
         text = """🤖 Бот-помощник для учёбы
@@ -93,7 +90,7 @@ class ScheduleBot:
     async def schedule_today(self, update, context):
         user_id = update.effective_user.id
         weekday = datetime.now().weekday()
-        week_type = "even" if self.is_even_week() else "odd"
+        week_type = "even"
         rows = self.db.get_schedule(user_id, week_type, weekday)
         if not rows:
             await update.message.reply_text("📭 На сегодня пар нет")
@@ -117,11 +114,6 @@ class ScheduleBot:
             if not has_any:
                 msg += "   (нет пар)\n"
         await update.message.reply_text(msg)
-
-    def is_even_week(self):
-        start = datetime(2025, 9, 1)
-        days = (datetime.now() - start).days
-        return (days // 7) % 2 == 0
 
     # ========== ДОБАВЛЕНИЕ ОДНОЙ ПАРЫ ==========
     async def add_one_start(self, update, context):
@@ -170,12 +162,11 @@ class ScheduleBot:
         elif text == "Нечетная неделя":
             context.user_data['batch_week'] = "odd"
         else:
-            # Если пользователь ввел не кнопку, а что-то другое
-            await update.message.reply_text("Пожалуйста, нажми на кнопку 'Четная неделя' или 'Нечетная неделя'")
+            await update.message.reply_text("Пожалуйста, нажми на кнопку")
             return BATCH_WEEK
         
         await update.message.reply_text(
-            "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\nВторник 12:00 Физика\n\nКогда закончишь, напиши /done",
+            "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\n\nКогда закончишь, напиши /done",
             reply_markup=ReplyKeyboardRemove()
         )
         return BATCH_ADD
@@ -198,8 +189,6 @@ class ScheduleBot:
             if m and m.group(1) in DAYS_EN:
                 self.db.save_schedule(update.effective_user.id, week, DAYS_EN[m.group(1)], m.group(3), m.group(2))
                 saved += 1
-            else:
-                await update.message.reply_text(f"⚠️ Не распознано: {line}")
         await update.message.reply_text(f"✅ Сохранено пар: {saved}\nМожешь добавить ещё или напиши /done")
         return BATCH_ADD
 
@@ -268,29 +257,11 @@ class ScheduleBot:
                 deadline.strftime("%Y-%m-%d %H:%M:%S")
             )
             await update.message.reply_text(f"✅ Добавлено!\nДедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Неправильный формат. Пример: 2025-05-20 23:59")
+        except Exception:
+            await update.message.reply_text("❌ Неправильный формат. Пример: 2025-05-20 23:59")
             return HW_DEADLINE
         context.user_data.clear()
         return ConversationHandler.END
-
-    # ========== ПРОВЕРКА ДЕДЛАЙНОВ ==========
-    async def check_deadlines(self, context: ContextTypes.DEFAULT_TYPE):
-        homeworks = self.db.get_homeworks_by_deadline()
-        now = datetime.now()
-        for hw in homeworks:
-            hw_id, user_id, subject, task, deadline_str, is_notified = hw
-            deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M:%S")
-            hours_left = (deadline - now).total_seconds() / 3600
-            if 23 <= hours_left <= 25 and not is_notified:
-                try:
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=f"⚠️ НАПОМИНАНИЕ!\n\nПредмет: {subject}\nЗадание: {task}\nДедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n\nОстался 1 день!"
-                    )
-                    self.db.mark_notified(hw_id)
-                except Exception as e:
-                    print(f"Ошибка уведомления: {e}")
 
     async def cancel(self, update, context):
         await update.message.reply_text("❌ Отменено", reply_markup=ReplyKeyboardRemove())
@@ -304,7 +275,7 @@ class ScheduleBot:
 if __name__ == "__main__":
     TOKEN = os.environ.get("TOKEN")
     if not TOKEN:
-        print("❌ Ошибка: токен не найден в переменных окружения")
+        print("❌ Ошибка: токен не найден")
     else:
         bot = ScheduleBot(TOKEN)
         bot.run()
