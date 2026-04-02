@@ -66,7 +66,7 @@ class ScheduleBot:
             allow_reentry=True
         ))
 
-        # Домашнее задание
+        # ДОМАШНЕЕ ЗАДАНИЕ - исправлено
         self.app.add_handler(ConversationHandler(
             entry_points=[CommandHandler("add_homework", self.hw_start)],
             states={
@@ -177,7 +177,6 @@ class ScheduleBot:
     async def batch_add(self, update, context):
         text = update.message.text
         
-        # Завершаем диалог по /done
         if text == "/done":
             await update.message.reply_text("✅ Готово! Теперь можно добавить другую неделю или использовать другие команды.")
             context.user_data.clear()
@@ -234,39 +233,51 @@ class ScheduleBot:
 
     # ========== ДОМАШНЕЕ ЗАДАНИЕ ==========
     async def hw_start(self, update, context):
-        await update.message.reply_text("Название предмета:", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("📝 Введи название предмета:", reply_markup=ReplyKeyboardRemove())
         return HW_SUBJECT
 
     async def hw_subject(self, update, context):
         context.user_data['hw_subj'] = update.message.text
-        await update.message.reply_text("Что нужно сделать?")
+        await update.message.reply_text("📖 Опиши задание (что нужно сделать):")
         return HW_TASK
 
     async def hw_task(self, update, context):
         context.user_data['hw_task'] = update.message.text
-        await update.message.reply_text("Дедлайн (ГГГГ-ММ-ДД ЧЧ:ММ) или 'завтра 18:00'")
+        await update.message.reply_text("⏰ Введи дедлайн в формате:\nГГГГ-ММ-ДД ЧЧ:ММ\n\nНапример: 2025-05-20 23:59\n\nИли напиши 'завтра 18:00'")
         return HW_DEADLINE
 
     async def hw_deadline(self, update, context):
         text = update.message.text
         try:
-            if "завтра" in text:
+            if "завтра" in text.lower():
                 parts = text.split()
                 time_parts = parts[-1].split(':')
                 d = datetime.now() + timedelta(days=1)
-                deadline = d.replace(hour=int(time_parts[0]), minute=int(time_parts[1]))
+                deadline = d.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), second=0, microsecond=0)
             else:
                 deadline = datetime.strptime(text, "%Y-%m-%d %H:%M")
+            
             self.db.save_homework(
                 update.effective_user.id,
                 context.user_data['hw_subj'],
                 context.user_data['hw_task'],
                 deadline.strftime("%Y-%m-%d %H:%M:%S")
             )
-            await update.message.reply_text(f"✅ Добавлено!\nДедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}")
-        except Exception:
-            await update.message.reply_text("❌ Неправильный формат. Пример: 2025-05-20 23:59")
+            await update.message.reply_text(
+                f"✅ Домашнее задание добавлено!\n\n"
+                f"📚 Предмет: {context.user_data['hw_subj']}\n"
+                f"📝 Задание: {context.user_data['hw_task']}\n"
+                f"⏰ Дедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n\n"
+                f"Я напомню за день до сдачи!"
+            )
+        except Exception as e:
+            await update.message.reply_text(
+                f"❌ Ошибка: неправильный формат даты.\n\n"
+                f"Попробуй так: 2025-05-20 23:59\n"
+                f"Или: завтра 18:00"
+            )
             return HW_DEADLINE
+        
         context.user_data.clear()
         return ConversationHandler.END
 
@@ -276,7 +287,17 @@ class ScheduleBot:
         return ConversationHandler.END
 
     def run(self):
-        print("✅ Бот запущен!")
+        print("=" * 40)
+        print("🤖 БОТ ЗАПУЩЕН! 🚀")
+        print("=" * 40)
+        print("Команды:")
+        print("  /start - приветствие")
+        print("  /batch_schedule - добавить несколько пар")
+        print("  /delete_schedule - удалить пару")
+        print("  /add_homework - добавить задание")
+        print("  /schedule - расписание на сегодня")
+        print("  /all_schedule - всё расписание")
+        print("=" * 40)
         self.app.run_polling()
 
 if __name__ == "__main__":
