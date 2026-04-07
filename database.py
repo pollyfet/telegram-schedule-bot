@@ -104,3 +104,13 @@ class Database:
             (hw_id,)
         )
         self.conn.commit()
+    
+    def get_all_homeworks_for_user(self, user_id):
+        """Получаем все домашние задания пользователя"""
+        self.cursor.execute('''
+            SELECT id, user_id, subject, task, deadline, is_notified 
+            FROM homework 
+            WHERE user_id = ?
+            ORDER BY deadline
+        ''', (user_id,))
+        return self.cursor.fetchall()
