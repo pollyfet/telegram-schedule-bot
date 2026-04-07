@@ -8,7 +8,6 @@ from telegram.ext import (
     ConversationHandler, ContextTypes, filters
 )
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
 # Состояния
@@ -24,19 +23,10 @@ DAYS_RU = {
 }
 DAYS_EN = {v: k for k, v in DAYS_RU.items()}
 
-# Хранилища данных
+# Хранилища
 schedule_store = {}
 homework_store = {}
-
-# НАЧАЛО ОТСЧЕТА: понедельник этой недели (6 апреля 2026) - ЧЕТНАЯ неделя
-START_DATE = datetime(2026, 4, 6)  # ЧЕТНАЯ неделя
-
-def get_current_week_type():
-    """Определяет четная или нечетная неделя от START_DATE"""
-    today = datetime.now()
-    days_diff = (today - START_DATE).days
-    week_number = days_diff // 7
-    return "even" if week_number % 2 == 0 else "odd"
+user_week = {}  # Хранит какой тип недели выбрал пользователь: 'even' или 'odd'
 
 def save_schedule(user_id, week_type, day, subject, time):
     if user_id not in schedule_store:
@@ -78,10 +68,8 @@ def get_homeworks(user_id):
     return homework_store[user_id]
 
 def copy_week_schedule(user_id, from_week, to_week):
-    """Копирует расписание с одной недели на другую"""
     if user_id not in schedule_store:
         return 0
-    
     copied = 0
     for s in schedule_store[user_id]:
         if s['week_type'] == from_week:
@@ -98,13 +86,18 @@ def copy_week_schedule(user_id, from_week, to_week):
                 copied += 1
     return copied
 
-# Команды
+# ==================== КОМАНДЫ ====================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     text = """🤖 Бот-помощник для учёбы
 
+📅 /week - показать какая сейчас неделя
+📅 /set_even - установить что сейчас ЧЕТНАЯ неделя
+📅 /set_odd - установить что сейчас НЕЧЕТНАЯ неделя
+
 📚 /add_schedule - добавить одну пару
-📚 /batch_schedule - добавить несколько пар за раз
+📚 /batch_schedule - добавить несколько пар
 📋 /copy_schedule - скопировать расписание с одной недели на другую
 🗑 /delete_schedule - удалить пару
 📝 /add_homework - добавить домашнее задание
@@ -114,12 +107,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ❌ /cancel - отменить действие"""
     await update.message.reply_text(text)
 
+async def week_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_week:
+        user_week[user_id] = "even"
+    week_name = "ЧЕТНАЯ" if user_week[user_id] == "even" else "НЕЧЕТНАЯ"
+    await update.message.reply_text(f"📅 Сейчас *{week_name}* неделя", parse_mode="Markdown")
+
+async def set_even(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_week[user_id] = "even"
+    await update.message.reply_text("✅ Установлено: сейчас *ЧЕТНАЯ* неделя", parse_mode="Markdown")
+
+async def set_odd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_week[user_id] = "odd"
+    await update.message.reply_text("✅ Установлено: сейчас *НЕЧЕТНАЯ* неделя", parse_mode="Markdown")
+
 async def schedule_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     weekday = datetime.now().weekday()
-    week_type = get_current_week_type()
     
-    week_name = "Четная" if week_type == "even" else "Нечетная"
+    if user_id not in user_week:
+        user_week[user_id] = "even"
+    week_type = user_week[user_id]
+    week_name = "ЧЕТНАЯ" if week_type == "even" else "НЕЧЕТНАЯ"
     
     rows = get_schedule(user_id, week_type, weekday)
     if not rows:
@@ -130,13 +142,16 @@ async def schedule_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def all_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    current_week = get_current_week_type()
-    current_week_name = "Четная" if current_week == "even" else "Нечетная"
     
-    msg = f"📖 ПОЛНОЕ РАСПИСАНИЕ\n\n⭐ Сейчас {current_week_name} неделя\n"
+    if user_id not in user_week:
+        user_week[user_id] = "even"
+    current_week = user_week[user_id]
+    current_week_name = "ЧЕТНАЯ" if current_week == "even" else "НЕЧЕТНАЯ"
+    
+    msg = f"📖 *ПОЛНОЕ РАСПИСАНИЕ*\n\n⭐ Сейчас *{current_week_name}* неделя\n"
     
     for wt, wn in [("even", "Четная"), ("odd", "Нечетная")]:
-        msg += f"\n◾ {wn} неделя:\n"
+        msg += f"\n◾ *{wn} неделя:*\n"
         has_any = False
         for d in range(7):
             rows = get_schedule(user_id, wt, d)
@@ -146,7 +161,7 @@ async def all_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += "\n".join([f"   {t} - {s}" for s, t in rows]) + "\n"
         if not has_any:
             msg += "   (нет пар)\n"
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def all_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -154,7 +169,7 @@ async def all_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not homeworks:
         await update.message.reply_text("📭 Нет домашних заданий")
         return
-    msg = "📋 ВСЕ ДОМАШНИЕ ЗАДАНИЯ\n\n"
+    msg = "📋 *ВСЕ ДОМАШНИЕ ЗАДАНИЯ*\n\n"
     for hw in homeworks:
         deadline = datetime.strptime(hw['deadline'], "%Y-%m-%d %H:%M:%S")
         now = datetime.now()
@@ -166,8 +181,8 @@ async def all_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status = "⚠️ ЗАВТРА"
         else:
             status = f"📅 {deadline.strftime('%d.%m.%Y')}"
-        msg += f"📚 {hw['subject']}\n📝 {hw['task']}\n⏰ {status} {deadline.strftime('%H:%M')}\n\n"
-    await update.message.reply_text(msg)
+        msg += f"*{hw['subject']}*\n📝 {hw['task']}\n⏰ {status} {deadline.strftime('%H:%M')}\n\n"
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def copy_schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [["Четная → Нечетная", "Нечетная → Четная"]]
@@ -203,16 +218,12 @@ async def copy_schedule_choose(update: Update, context: ContextTypes.DEFAULT_TYP
             if get_schedule(user_id, from_week, d):
                 has_pairs = True
                 break
-        
         if not has_pairs:
             await update.message.reply_text(f"❌ На {from_name} неделе нет пар для копирования.")
         else:
             await update.message.reply_text(f"ℹ️ Все пары с {from_name} недели уже есть на {to_name} неделе.")
     else:
-        await update.message.reply_text(
-            f"✅ Скопировано {copied} пар(ы) с {from_name} недели на {to_name} неделю.\n\n"
-            f"Посмотреть результат: /all_schedule"
-        )
+        await update.message.reply_text(f"✅ Скопировано {copied} пар(ы) с {from_name} недели на {to_name} неделю.\n\nПосмотреть результат: /all_schedule")
     
     context.user_data.clear()
     return ConversationHandler.END
@@ -405,6 +416,9 @@ def main():
     
     # Команды
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("week", week_status))
+    app.add_handler(CommandHandler("set_even", set_even))
+    app.add_handler(CommandHandler("set_odd", set_odd))
     app.add_handler(CommandHandler("schedule", schedule_today))
     app.add_handler(CommandHandler("all_schedule", all_schedule))
     app.add_handler(CommandHandler("all_homework", all_homework))
@@ -453,7 +467,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
     
-    # Планировщик уведомлений
+    # Планировщик
     job_queue = app.job_queue
     if job_queue:
         job_queue.run_daily(check_deadlines, time=datetime.time(hour=9, minute=0))
