@@ -45,15 +45,18 @@ class Database:
         """)
         
         self.conn.commit()
+        print("✅ База данных инициализирована")
     
     def add_user(self, user_id, username):
-        self.cursor.execute(
-            "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
-            (user_id, username)
-        )
+        """Добавление или обновление пользователя"""
+        self.cursor.execute("""
+            INSERT OR REPLACE INTO users (user_id, username, created_at)
+            VALUES (?, ?, COALESCE((SELECT created_at FROM users WHERE user_id = ?), CURRENT_TIMESTAMP))
+        """, (user_id, username, user_id))
         self.conn.commit()
     
     def save_schedule(self, user_id, week_type, day, subject, time):
+        """Сохранение пары в расписание"""
         self.cursor.execute("""
             INSERT INTO schedule (user_id, week_type, day, subject, time)
             VALUES (?, ?, ?, ?, ?)
@@ -61,6 +64,7 @@ class Database:
         self.conn.commit()
     
     def get_schedule(self, user_id, week_type, day):
+        """Получение расписания на конкретный день"""
         self.cursor.execute("""
             SELECT subject, time FROM schedule
             WHERE user_id = ? AND week_type = ? AND day = ?
@@ -69,6 +73,7 @@ class Database:
         return self.cursor.fetchall()
     
     def get_all_schedule_for_user(self, user_id):
+        """Получение всего расписания пользователя"""
         self.cursor.execute("""
             SELECT id, week_type, day, subject, time FROM schedule
             WHERE user_id = ?
@@ -77,6 +82,7 @@ class Database:
         return self.cursor.fetchall()
     
     def save_homework(self, user_id, subject, task, deadline):
+        """Сохранение домашнего задания"""
         self.cursor.execute("""
             INSERT INTO homework (user_id, subject, task, deadline, is_notified)
             VALUES (?, ?, ?, ?, 0)
@@ -84,9 +90,27 @@ class Database:
         self.conn.commit()
     
     def get_all_homeworks_for_user(self, user_id):
+        """Получение всех домашних заданий пользователя"""
         self.cursor.execute("""
             SELECT * FROM homework
             WHERE user_id = ?
             ORDER BY deadline ASC
         """, (user_id,))
         return self.cursor.fetchall()
+    
+    def delete_schedule(self, schedule_id):
+        """Удаление пары по ID"""
+        self.cursor.execute("DELETE FROM schedule WHERE id = ?", (schedule_id,))
+        self.conn.commit()
+        return self.cursor.rowcount > 0
+    
+    def get_schedule_by_id(self, schedule_id, user_id):
+        """Получение пары по ID"""
+        self.cursor.execute("""
+            SELECT * FROM schedule WHERE id = ? AND user_id = ?
+        """, (schedule_id, user_id))
+        return self.cursor.fetchone()
+    
+    def close(self):
+        """Закрытие соединения с БД"""
+        self.conn.close()
