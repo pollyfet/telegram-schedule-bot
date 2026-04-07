@@ -33,6 +33,7 @@ class ScheduleBot:
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CommandHandler("schedule", self.schedule_today))
         self.app.add_handler(CommandHandler("all_schedule", self.all_schedule))
+        self.app.add_handler(CommandHandler("all_homework", self.all_homework))  # НОВАЯ КОМАНДА
 
         # Добавление одной пары
         self.app.add_handler(ConversationHandler(
@@ -66,7 +67,7 @@ class ScheduleBot:
             allow_reentry=True
         ))
 
-        # ДОМАШНЕЕ ЗАДАНИЕ - исправлено
+        # Домашнее задание
         self.app.add_handler(ConversationHandler(
             entry_points=[CommandHandler("add_homework", self.hw_start)],
             states={
@@ -82,13 +83,14 @@ class ScheduleBot:
         self.db.add_user(update.effective_user.id, update.effective_user.username)
         text = """🤖 Бот-помощник для учёбы
 
-/add_schedule - добавить одну пару
-/batch_schedule - добавить несколько пар за раз
-/delete_schedule - удалить пару
-/add_homework - добавить домашнее задание
-/schedule - расписание на сегодня
-/all_schedule - всё расписание
-/cancel - отменить действие"""
+📚 /add_schedule - добавить одну пару
+📚 /batch_schedule - добавить несколько пар за раз
+🗑 /delete_schedule - удалить пару
+📝 /add_homework - добавить домашнее задание
+📋 /all_homework - посмотреть все домашние задания
+📅 /schedule - расписание на сегодня
+📖 /all_schedule - всё расписание
+❌ /cancel - отменить действие"""
         await update.message.reply_text(text)
 
     async def schedule_today(self, update, context):
@@ -117,6 +119,45 @@ class ScheduleBot:
             if not has_any:
                 msg += "   (нет пар)\n"
         await update.message.reply_text(msg)
+
+    # ========== ВСЕ ДОМАШНИЕ ЗАДАНИЯ ==========
+    async def all_homework(self, update, context):
+        user_id = update.effective_user.id
+        homeworks = self.db.get_all_homeworks_for_user(user_id)
+        
+        if not homeworks:
+            await update.message.reply_text("📭 Нет текущих домашних заданий")
+            return
+        
+        msg = "📋 **ВСЕ ДОМАШНИЕ ЗАДАНИЯ**\n\n"
+        
+        # Сортируем по дедлайну
+        homeworks.sort(key=lambda x: x[4])
+        
+        for hw in homeworks:
+            hw_id, user_id, subject, task, deadline_str, is_notified = hw
+            deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M:%S")
+            now = datetime.now()
+            
+            # Определяем статус
+            if deadline < now:
+                status = "❌ ПРОСРОЧЕНО"
+            elif (deadline - now).days == 0:
+                status = "⚠️ СЕГОДНЯ"
+            elif (deadline - now).days == 1:
+                status = "⚠️ ЗАВТРА"
+            else:
+                status = f"📅 {deadline.strftime('%d.%m.%Y')}"
+            
+            msg += f"**{subject}**\n"
+            msg += f"📝 {task}\n"
+            msg += f"⏰ {status} {deadline.strftime('%H:%M')}\n"
+            msg += f"🆔 #{hw_id}\n"
+            msg += "\n" + "─"*20 + "\n\n"
+        
+        msg += "🗑 Для удаления задания напиши: /delete_homework [ID]"
+        
+        await update.message.reply_text(msg, parse_mode="Markdown")
 
     # ========== ДОБАВЛЕНИЕ ОДНОЙ ПАРЫ ==========
     async def add_one_start(self, update, context):
@@ -268,7 +309,8 @@ class ScheduleBot:
                 f"📚 Предмет: {context.user_data['hw_subj']}\n"
                 f"📝 Задание: {context.user_data['hw_task']}\n"
                 f"⏰ Дедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n\n"
-                f"Я напомню за день до сдачи!"
+                f"Я напомню за день до сдачи!\n"
+                f"Посмотреть все задания: /all_homework"
             )
         except Exception as e:
             await update.message.reply_text(
@@ -295,6 +337,7 @@ class ScheduleBot:
         print("  /batch_schedule - добавить несколько пар")
         print("  /delete_schedule - удалить пару")
         print("  /add_homework - добавить задание")
+        print("  /all_homework - все домашние задания")
         print("  /schedule - расписание на сегодня")
         print("  /all_schedule - всё расписание")
         print("=" * 40)
