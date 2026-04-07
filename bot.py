@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler,
-    ConversationHandler, CallbackContext, Filters
+    ConversationHandler, CallbackContext, filters
 )
 
 # Настройка логирования
@@ -23,7 +23,7 @@ DAYS_RU = {
 }
 DAYS_EN = {v: k for k, v in DAYS_RU.items()}
 
-# Простая база данных в памяти (пока не настроишь нормальную БД)
+# Хранилища данных
 user_data_store = {}
 schedule_store = {}
 homework_store = {}
@@ -73,7 +73,6 @@ def get_homeworks(user_id):
 
 # Команды
 def start(update, context):
-    user_id = update.effective_user.id
     text = """🤖 Бот-помощник для учёбы
 
 📚 /add_schedule - добавить одну пару
@@ -121,7 +120,17 @@ def all_homework(update, context):
         return
     msg = "📋 ВСЕ ДОМАШНИЕ ЗАДАНИЯ\n\n"
     for hw in homeworks:
-        msg += f"📚 {hw['subject']}\n📝 {hw['task']}\n⏰ {hw['deadline']}\n\n"
+        deadline = datetime.strptime(hw['deadline'], "%Y-%m-%d %H:%M:%S")
+        now = datetime.now()
+        if deadline < now:
+            status = "❌ ПРОСРОЧЕНО"
+        elif (deadline - now).days == 0:
+            status = "⚠️ СЕГОДНЯ"
+        elif (deadline - now).days == 1:
+            status = "⚠️ ЗАВТРА"
+        else:
+            status = f"📅 {deadline.strftime('%d.%m.%Y')}"
+        msg += f"📚 {hw['subject']}\n📝 {hw['task']}\n⏰ {status} {deadline.strftime('%H:%M')}\n\n"
     update.message.reply_text(msg)
 
 # Добавление одной пары
@@ -253,12 +262,20 @@ def hw_subject(update, context):
 
 def hw_task(update, context):
     context.user_data['hw_task'] = update.message.text
-    update.message.reply_text("⏰ Введи дедлайн в формате: ГГГГ-ММ-ДД ЧЧ:ММ\nПример: 2025-05-20 23:59")
+    update.message.reply_text("⏰ Введи дедлайн в формате: ГГГГ-ММ-ДД ЧЧ:ММ\nПример: 2025-05-20 23:59\n\nИли напиши: завтра 18:00")
     return HW_DEADLINE
 
 def hw_deadline(update, context):
+    text = update.message.text.strip().lower()
     try:
-        deadline = datetime.strptime(update.message.text, "%Y-%m-%d %H:%M")
+        if "завтра" in text:
+            parts = text.split()
+            time_str = parts[-1]
+            time_parts = time_str.split(':')
+            d = datetime.now() + timedelta(days=1)
+            deadline = d.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), second=0, microsecond=0)
+        else:
+            deadline = datetime.strptime(text, "%Y-%m-%d %H:%M")
         save_homework(
             update.effective_user.id,
             context.user_data['hw_subj'],
@@ -283,7 +300,7 @@ def main():
         print("❌ Ошибка: токен не найден")
         return
     
-    updater = Updater(token, use_context=True)
+    updater = Updater(token)
     dp = updater.dispatcher
     
     # Команды
@@ -296,10 +313,10 @@ def main():
     dp.add_handler(ConversationHandler(
         entry_points=[CommandHandler("add_schedule", add_schedule_start)],
         states={
-            ADD_SCHEDULE_WEEK: [MessageHandler(Filters.text & ~Filters.command, add_schedule_week)],
-            ADD_SCHEDULE_DAY: [MessageHandler(Filters.text & ~Filters.command, add_schedule_day)],
-            ADD_SCHEDULE_SUBJECT: [MessageHandler(Filters.text & ~Filters.command, add_schedule_subject)],
-            ADD_SCHEDULE_TIME: [MessageHandler(Filters.text & ~Filters.command, add_schedule_time)],
+            ADD_SCHEDULE_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_week)],
+            ADD_SCHEDULE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_day)],
+            ADD_SCHEDULE_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_subject)],
+            ADD_SCHEDULE_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_time)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
@@ -307,24 +324,24 @@ def main():
     dp.add_handler(ConversationHandler(
         entry_points=[CommandHandler("batch_schedule", batch_start)],
         states={
-            BATCH_WEEK: [MessageHandler(Filters.text & ~Filters.command, batch_week)],
-            BATCH_ADD: [MessageHandler(Filters.text & ~Filters.command, batch_add)],
+            BATCH_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, batch_week)],
+            BATCH_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, batch_add)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
     
     dp.add_handler(ConversationHandler(
         entry_points=[CommandHandler("delete_schedule", delete_start)],
-        states={DELETE_CHOOSE: [MessageHandler(Filters.text & ~Filters.command, delete_choose)]},
+        states={DELETE_CHOOSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_choose)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
     
     dp.add_handler(ConversationHandler(
         entry_points=[CommandHandler("add_homework", hw_start)],
         states={
-            HW_SUBJECT: [MessageHandler(Filters.text & ~Filters.command, hw_subject)],
-            HW_TASK: [MessageHandler(Filters.text & ~Filters.command, hw_task)],
-            HW_DEADLINE: [MessageHandler(Filters.text & ~Filters.command, hw_deadline)],
+            HW_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, hw_subject)],
+            HW_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, hw_task)],
+            HW_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, hw_deadline)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
