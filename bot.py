@@ -1,119 +1,80 @@
 import os
 import logging
 import re
-import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    ConversationHandler, ContextTypes, filters
+    Updater, CommandHandler, MessageHandler,
+    ConversationHandler, CallbackContext, Filters
 )
-import database
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 
-# Состояния для ConversationHandler
-(
-    ADD_SCHEDULE_WEEK, 
-    ADD_SCHEDULE_DAY, 
-    ADD_SCHEDULE_SUBJECT, 
-    ADD_SCHEDULE_TIME,
-    BATCH_WEEK, 
-    BATCH_ADD,
-    DELETE_CHOOSE,
-    HW_SUBJECT, 
-    HW_TASK, 
-    HW_DEADLINE
-) = range(10)
+# Состояния
+ADD_SCHEDULE_WEEK, ADD_SCHEDULE_DAY, ADD_SCHEDULE_SUBJECT, ADD_SCHEDULE_TIME = range(4)
+BATCH_WEEK, BATCH_ADD = range(4, 6)
+DELETE_CHOOSE = 6
+HW_SUBJECT, HW_TASK, HW_DEADLINE = range(7, 10)
 
-# Словари дней недели
 DAYS_RU = {
-    0: "Понедельник", 
-    1: "Вторник", 
-    2: "Среда",
-    3: "Четверг", 
-    4: "Пятница", 
-    5: "Суббота", 
-    6: "Воскресенье"
+    0: "Понедельник", 1: "Вторник", 2: "Среда",
+    3: "Четверг", 4: "Пятница", 5: "Суббота", 6: "Воскресенье"
 }
 DAYS_EN = {v: k for k, v in DAYS_RU.items()}
 
-class ScheduleBot:
-    def __init__(self, token):
-        self.db = database.Database()
-        self.app = Application.builder().token(token).build()
-        self.setup_handlers()
+# Простая база данных в памяти (пока не настроишь нормальную БД)
+user_data_store = {}
+schedule_store = {}
+homework_store = {}
 
-    def setup_handlers(self):
-        # Общие fallback команды для всех диалогов
-        common_fallbacks = [
-            CommandHandler("cancel", self.cancel),
-            CommandHandler("start", self.start),
-        ]
-        
-        # ===== ПРОСТЫЕ КОМАНДЫ =====
-        self.app.add_handler(CommandHandler("start", self.start))
-        self.app.add_handler(CommandHandler("schedule", self.schedule_today))
-        self.app.add_handler(CommandHandler("all_schedule", self.all_schedule))
-        self.app.add_handler(CommandHandler("all_homework", self.all_homework))
-        
-        # ===== ДОБАВЛЕНИЕ ОДНОЙ ПАРЫ =====
-        self.app.add_handler(ConversationHandler(
-            entry_points=[CommandHandler("add_schedule", self.add_schedule_start)],
-            states={
-                ADD_SCHEDULE_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_schedule_week)],
-                ADD_SCHEDULE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_schedule_day)],
-                ADD_SCHEDULE_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_schedule_subject)],
-                ADD_SCHEDULE_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_schedule_time)],
-            },
-            fallbacks=common_fallbacks,
-            allow_reentry=True
-        ))
-        
-        # ===== ДОБАВЛЕНИЕ НЕСКОЛЬКИХ ПАР =====
-        self.app.add_handler(ConversationHandler(
-            entry_points=[CommandHandler("batch_schedule", self.batch_start)],
-            states={
-                BATCH_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.batch_week)],
-                BATCH_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.batch_add)],
-            },
-            fallbacks=common_fallbacks,
-            allow_reentry=True
-        ))
-        
-        # ===== УДАЛЕНИЕ ПАРЫ =====
-        self.app.add_handler(ConversationHandler(
-            entry_points=[CommandHandler("delete_schedule", self.delete_start)],
-            states={DELETE_CHOOSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.delete_choose)]},
-            fallbacks=common_fallbacks,
-            allow_reentry=True
-        ))
-        
-        # ===== ДОБАВЛЕНИЕ ДОМАШНЕГО ЗАДАНИЯ =====
-        self.app.add_handler(ConversationHandler(
-            entry_points=[CommandHandler("add_homework", self.hw_start)],
-            states={
-                HW_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.hw_subject)],
-                HW_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.hw_task)],
-                HW_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.hw_deadline)],
-            },
-            fallbacks=common_fallbacks,
-            allow_reentry=True
-        ))
+def get_user_data(user_id):
+    if user_id not in user_data_store:
+        user_data_store[user_id] = {}
+    return user_data_store[user_id]
 
-    async def start(self, update, context):
-        """Обработчик команды /start"""
-        # Очищаем данные пользователя
-        context.user_data.clear()
-        
-        # Добавляем пользователя в БД
-        self.db.add_user(update.effective_user.id, update.effective_user.username)
-        
-        text = """🤖 *Бот-помощник для учёбы*
+def save_schedule(user_id, week_type, day, subject, time):
+    if user_id not in schedule_store:
+        schedule_store[user_id] = []
+    schedule_store[user_id].append({
+        'id': len(schedule_store[user_id]) + 1,
+        'week_type': week_type,
+        'day': day,
+        'subject': subject,
+        'time': time
+    })
+
+def get_schedule(user_id, week_type, day):
+    if user_id not in schedule_store:
+        return []
+    return [(s['subject'], s['time']) for s in schedule_store[user_id] 
+            if s['week_type'] == week_type and s['day'] == day]
+
+def get_all_schedule(user_id):
+    if user_id not in schedule_store:
+        return []
+    return [(s['id'], s['week_type'], s['day'], s['subject'], s['time']) 
+            for s in schedule_store[user_id]]
+
+def save_homework(user_id, subject, task, deadline):
+    if user_id not in homework_store:
+        homework_store[user_id] = []
+    homework_store[user_id].append({
+        'id': len(homework_store[user_id]) + 1,
+        'subject': subject,
+        'task': task,
+        'deadline': deadline
+    })
+
+def get_homeworks(user_id):
+    if user_id not in homework_store:
+        return []
+    return homework_store[user_id]
+
+# Команды
+def start(update, context):
+    user_id = update.effective_user.id
+    text = """🤖 Бот-помощник для учёбы
 
 📚 /add_schedule - добавить одну пару
 📚 /batch_schedule - добавить несколько пар за раз
@@ -122,453 +83,255 @@ class ScheduleBot:
 📋 /all_homework - все домашние задания
 📅 /schedule - расписание на сегодня
 📖 /all_schedule - всё расписание
-❌ /cancel - отменить действие
+❌ /cancel - отменить действие"""
+    update.message.reply_text(text)
 
-_Бот автоматически напомнит о дедлайнах за сутки_"""
-        
-        await update.message.reply_text(text, parse_mode="Markdown")
+def schedule_today(update, context):
+    user_id = update.effective_user.id
+    weekday = datetime.now().weekday()
+    week_type = "even" if (datetime.now().isocalendar()[1] % 2 == 0) else "odd"
+    rows = get_schedule(user_id, week_type, weekday)
+    if not rows:
+        update.message.reply_text("📭 На сегодня пар нет")
+    else:
+        msg = f"📚 {DAYS_RU[weekday]}:\n" + "\n".join([f"⏰ {t} - {s}" for s, t in rows])
+        update.message.reply_text(msg)
 
-    async def schedule_today(self, update, context):
-        """Расписание на сегодня"""
-        user_id = update.effective_user.id
-        weekday = datetime.now().weekday()
-        week_type = "even" if (datetime.now().isocalendar()[1] % 2 == 0) else "odd"
-        
-        rows = self.db.get_schedule(user_id, week_type, weekday)
-        
-        if not rows:
-            await update.message.reply_text("📭 На сегодня пар нет")
-        else:
-            msg = f"📚 *{DAYS_RU[weekday]}*:\n"
-            msg += "\n".join([f"⏰ {t} - {s}" for s, t in rows])
-            await update.message.reply_text(msg, parse_mode="Markdown")
+def all_schedule(update, context):
+    user_id = update.effective_user.id
+    msg = "📖 ПОЛНОЕ РАСПИСАНИЕ\n"
+    for wt, wn in [("even", "Четная"), ("odd", "Нечетная")]:
+        msg += f"\n◾ {wn} неделя:\n"
+        has_any = False
+        for d in range(7):
+            rows = get_schedule(user_id, wt, d)
+            if rows:
+                has_any = True
+                msg += f"\n📅 {DAYS_RU[d]}:\n"
+                msg += "\n".join([f"   {t} - {s}" for s, t in rows]) + "\n"
+        if not has_any:
+            msg += "   (нет пар)\n"
+    update.message.reply_text(msg)
 
-    async def all_schedule(self, update, context):
-        """Всё расписание"""
-        user_id = update.effective_user.id
-        msg = "📖 *ПОЛНОЕ РАСПИСАНИЕ*\n"
-        
-        for wt, wn in [("even", "Четная"), ("odd", "Нечетная")]:
-            msg += f"\n◾ *{wn} неделя:*\n"
-            has_any = False
-            for d in range(7):
-                rows = self.db.get_schedule(user_id, wt, d)
-                if rows:
-                    has_any = True
-                    msg += f"\n📅 *{DAYS_RU[d]}*:\n"
-                    msg += "\n".join([f"   {t} - {s}" for s, t in rows]) + "\n"
-            if not has_any:
-                msg += "   (нет пар)\n"
-        
-        await update.message.reply_text(msg, parse_mode="Markdown")
+def all_homework(update, context):
+    user_id = update.effective_user.id
+    homeworks = get_homeworks(user_id)
+    if not homeworks:
+        update.message.reply_text("📭 Нет домашних заданий")
+        return
+    msg = "📋 ВСЕ ДОМАШНИЕ ЗАДАНИЯ\n\n"
+    for hw in homeworks:
+        msg += f"📚 {hw['subject']}\n📝 {hw['task']}\n⏰ {hw['deadline']}\n\n"
+    update.message.reply_text(msg)
 
-    async def all_homework(self, update, context):
-        """Все домашние задания"""
-        user_id = update.effective_user.id
-        homeworks = self.db.get_all_homeworks_for_user(user_id)
-        
-        if not homeworks:
-            await update.message.reply_text("📭 Нет текущих домашних заданий")
-            return
-        
-        msg = "📋 *ВСЕ ДОМАШНИЕ ЗАДАНИЯ*\n\n"
-        
-        for hw in homeworks:
-            hw_id, user_id, subject, task, deadline_str, is_notified = hw
-            deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M:%S")
-            now = datetime.now()
-            
-            if deadline < now:
-                status = "❌ *ПРОСРОЧЕНО*"
-            elif (deadline - now).days == 0:
-                status = "⚠️ *СЕГОДНЯ*"
-            elif (deadline - now).days == 1:
-                status = "⚠️ *ЗАВТРА*"
-            else:
-                status = f"📅 {deadline.strftime('%d.%m.%Y')}"
-            
-            msg += f"*{subject}*\n"
-            msg += f"📝 {task}\n"
-            msg += f"⏰ {status} {deadline.strftime('%H:%M')}\n"
-            msg += "\n" + "─"*20 + "\n\n"
-        
-        await update.message.reply_text(msg, parse_mode="Markdown")
+# Добавление одной пары
+def add_schedule_start(update, context):
+    kb = [["Четная неделя", "Нечетная неделя"]]
+    update.message.reply_text("Выбери тип недели:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+    return ADD_SCHEDULE_WEEK
 
-    # ========== ДОБАВЛЕНИЕ ОДНОЙ ПАРЫ ==========
-    async def add_schedule_start(self, update, context):
-        kb = [["Четная неделя", "Нечетная неделя"]]
-        await update.message.reply_text(
-            "Выбери тип недели:",
-            reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
-        )
+def add_schedule_week(update, context):
+    text = update.message.text
+    if text == "Четная неделя":
+        context.user_data['week'] = "even"
+    elif text == "Нечетная неделя":
+        context.user_data['week'] = "odd"
+    else:
+        update.message.reply_text("Пожалуйста, нажми на кнопку")
         return ADD_SCHEDULE_WEEK
+    kb = [[d] for d in DAYS_RU.values()]
+    update.message.reply_text("Выбери день:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+    return ADD_SCHEDULE_DAY
 
-    async def add_schedule_week(self, update, context):
-        text = update.message.text
-        if text == "Четная неделя":
-            context.user_data['week'] = "even"
-        elif text == "Нечетная неделя":
-            context.user_data['week'] = "odd"
-        else:
-            await update.message.reply_text("Пожалуйста, нажми на кнопку")
-            return ADD_SCHEDULE_WEEK
-        
-        kb = [[d] for d in DAYS_RU.values()]
-        await update.message.reply_text(
-            "Выбери день:",
-            reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
-        )
-        return ADD_SCHEDULE_DAY
+def add_schedule_day(update, context):
+    context.user_data['day'] = DAYS_EN[update.message.text]
+    update.message.reply_text("Название предмета:", reply_markup=ReplyKeyboardRemove())
+    return ADD_SCHEDULE_SUBJECT
 
-    async def add_schedule_day(self, update, context):
-        context.user_data['day'] = DAYS_EN[update.message.text]
-        await update.message.reply_text(
-            "Название предмета:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return ADD_SCHEDULE_SUBJECT
+def add_schedule_subject(update, context):
+    context.user_data['subject'] = update.message.text
+    update.message.reply_text("Время (например: 10:30):")
+    return ADD_SCHEDULE_TIME
 
-    async def add_schedule_subject(self, update, context):
-        context.user_data['subject'] = update.message.text
-        await update.message.reply_text("Время (например: 10:30):")
-        return ADD_SCHEDULE_TIME
+def add_schedule_time(update, context):
+    save_schedule(
+        update.effective_user.id,
+        context.user_data['week'],
+        context.user_data['day'],
+        context.user_data['subject'],
+        update.message.text
+    )
+    update.message.reply_text(f"✅ Добавлено: {context.user_data['subject']}")
+    context.user_data.clear()
+    return ConversationHandler.END
 
-    async def add_schedule_time(self, update, context):
-        self.db.save_schedule(
-            update.effective_user.id,
-            context.user_data['week'],
-            context.user_data['day'],
-            context.user_data['subject'],
-            update.message.text
-        )
-        await update.message.reply_text(f"✅ Добавлено: {context.user_data['subject']}")
-        context.user_data.clear()
-        return ConversationHandler.END
+# Добавление нескольких пар
+def batch_start(update, context):
+    kb = [["Четная неделя", "Нечетная неделя"]]
+    update.message.reply_text("Выбери тип недели:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
+    return BATCH_WEEK
 
-    # ========== ДОБАВЛЕНИЕ НЕСКОЛЬКИХ ПАР ==========
-    async def batch_start(self, update, context):
-        kb = [["Четная неделя", "Нечетная неделя"]]
-        await update.message.reply_text(
-            "Выбери тип недели:",
-            reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
-        )
+def batch_week(update, context):
+    text = update.message.text
+    if text == "Четная неделя":
+        context.user_data['batch_week'] = "even"
+    elif text == "Нечетная неделя":
+        context.user_data['batch_week'] = "odd"
+    else:
+        update.message.reply_text("Пожалуйста, нажми на кнопку")
         return BATCH_WEEK
+    update.message.reply_text(
+        "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\n\nКогда закончишь, напиши /done",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return BATCH_ADD
 
-    async def batch_week(self, update, context):
-        text = update.message.text
-        if text == "Четная неделя":
-            context.user_data['batch_week'] = "even"
-        elif text == "Нечетная неделя":
-            context.user_data['batch_week'] = "odd"
-        else:
-            await update.message.reply_text("Пожалуйста, нажми на кнопку")
-            return BATCH_WEEK
-        
-        await update.message.reply_text(
-            "📝 *Введи пары в формате:*\n"
-            "`ДЕНЬ ВРЕМЯ ПРЕДМЕТ`\n\n"
-            "*Пример:*\n"
-            "`Понедельник 10:30 Математика`\n"
-            "`Вторник 14:00 Физика`\n\n"
-            "Можно ввести несколько строк сразу.\n\n"
-            "✅ Когда закончишь - напиши `/done`\n"
-            "❌ Чтобы отменить - `/cancel`",
-            parse_mode="Markdown",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return BATCH_ADD
-
-    async def batch_add(self, update, context):
-        text = update.message.text.strip()
-        
-        # Выход из режима
-        if text.lower() == "/done":
-            await update.message.reply_text("✅ Добавление пар завершено!")
-            context.user_data.clear()
-            return ConversationHandler.END
-        
-        # Отмена
-        if text.lower() == "/cancel":
-            await update.message.reply_text("❌ Добавление пар отменено.")
-            context.user_data.clear()
-            return ConversationHandler.END
-        
-        # Защита от других команд
-        if text.startswith("/"):
-            await update.message.reply_text(
-                f"⚠️ Вы в режиме добавления пар.\n\n"
-                f"Доступно:\n"
-                f"• `/done` - завершить\n"
-                f"• `/cancel` - отменить\n\n"
-                f"Или введите пары в формате:\n"
-                f"`Понедельник 10:30 Математика`",
-                parse_mode="Markdown"
-            )
-            return BATCH_ADD
-        
-        lines = text.split('\n')
-        saved = 0
-        week = context.user_data.get('batch_week', 'even')
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Регулярное выражение для парсинга
-            match = re.match(r'^([А-Яа-я]+)\s+(\d{1,2}:\d{2})\s+(.+)$', line)
-            if match and match.group(1) in DAYS_EN:
-                day_name = match.group(1)
-                time = match.group(2)
-                subject = match.group(3)
-                self.db.save_schedule(
-                    update.effective_user.id,
-                    week,
-                    DAYS_EN[day_name],
-                    subject,
-                    time
-                )
-                saved += 1
-        
-        if saved == 0:
-            await update.message.reply_text(
-                f"❌ *Не распознано ни одной пары*\n\n"
-                f"*Правильный формат:*\n"
-                f"`ДЕНЬ ВРЕМЯ ПРЕДМЕТ`\n\n"
-                f"*Пример:*\n"
-                f"`Понедельник 10:30 Математика`\n\n"
-                f"✅ Напиши `/done` для выхода\n"
-                f"❌ Или `/cancel` для отмены",
-                parse_mode="Markdown"
-            )
-        else:
-            await update.message.reply_text(
-                f"✅ *Сохранено пар: {saved}*\n\n"
-                f"Можно добавить ещё или написать `/done` для завершения.",
-                parse_mode="Markdown"
-            )
-        
-        return BATCH_ADD
-
-    # ========== УДАЛЕНИЕ ПАРЫ ==========
-    async def delete_start(self, update, context):
-        user_id = update.effective_user.id
-        rows = self.db.get_all_schedule_for_user(user_id)
-        
-        if not rows:
-            await update.message.reply_text("📭 Нет пар для удаления")
-            return ConversationHandler.END
-
-        context.user_data['delete_list'] = rows
-        msg = "🗑 *Выбери пару для удаления:*\n\n"
-        
-        for r in rows:
-            week_name = "Четная" if r[1] == "even" else "Нечетная"
-            msg += f"`{r[0]}.` {week_name} неделя, {DAYS_RU[r[2]]}, {r[4]} - {r[3]}\n"
-        
-        msg += "\nВведи номер пары:"
-        await update.message.reply_text(msg, parse_mode="Markdown")
-        return DELETE_CHOOSE
-
-    async def delete_choose(self, update, context):
-        try:
-            num = int(update.message.text.strip())
-            deleted = False
-            
-            for r in context.user_data.get('delete_list', []):
-                if r[0] == num:
-                    self.db.cursor.execute("DELETE FROM schedule WHERE id = ?", (num,))
-                    self.db.conn.commit()
-                    await update.message.reply_text(f"✅ Удалена пара: {r[3]} в {r[4]}")
-                    deleted = True
-                    break
-            
-            if not deleted:
-                await update.message.reply_text("❌ Пара с таким номером не найдена")
-        except ValueError:
-            await update.message.reply_text("❌ Введи номер цифрой")
-        
+def batch_add(update, context):
+    text = update.message.text.strip()
+    if text == "/done":
+        update.message.reply_text("✅ Готово!")
         context.user_data.clear()
         return ConversationHandler.END
+    lines = text.split('\n')
+    saved = 0
+    week = context.user_data.get('batch_week', 'even')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        match = re.match(r'^([А-Яа-я]+)\s+(\d{1,2}:\d{2})\s+(.+)$', line)
+        if match and match.group(1) in DAYS_EN:
+            save_schedule(update.effective_user.id, week, DAYS_EN[match.group(1)], match.group(3), match.group(2))
+            saved += 1
+    if saved == 0:
+        update.message.reply_text("❌ Не распознано ни одной пары\nФормат: ДЕНЬ ВРЕМЯ ПРЕДМЕТ\nПример: Понедельник 10:30 Математика")
+    else:
+        update.message.reply_text(f"✅ Сохранено пар: {saved}\n\nЕсли закончил — напиши /done")
+    return BATCH_ADD
 
-    # ========== ДОМАШНЕЕ ЗАДАНИЕ ==========
-    async def hw_start(self, update, context):
-        await update.message.reply_text(
-            "📝 *Добавление домашнего задания*\n\nВведи название предмета:",
-            parse_mode="Markdown",
-            reply_markup=ReplyKeyboardRemove()
+# Удаление пары
+def delete_start(update, context):
+    user_id = update.effective_user.id
+    rows = get_all_schedule(user_id)
+    if not rows:
+        update.message.reply_text("📭 Нет пар для удаления")
+        return ConversationHandler.END
+    context.user_data['delete_list'] = rows
+    msg = "🗑 Выбери пару для удаления:\n\n"
+    for r in rows:
+        week_name = "Четная" if r[1] == "even" else "Нечетная"
+        msg += f"{r[0]}. {week_name} неделя, {DAYS_RU[r[2]]}, {r[4]} - {r[3]}\n"
+    msg += "\nВведи номер пары:"
+    update.message.reply_text(msg)
+    return DELETE_CHOOSE
+
+def delete_choose(update, context):
+    try:
+        num = int(update.message.text.strip())
+        rows = context.user_data.get('delete_list', [])
+        for i, r in enumerate(rows):
+            if r[0] == num:
+                del schedule_store[update.effective_user.id][i]
+                update.message.reply_text(f"✅ Удалена пара: {r[3]} в {r[4]}")
+                break
+        else:
+            update.message.reply_text("❌ Пара не найдена")
+    except:
+        update.message.reply_text("❌ Введи номер цифрой")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# Домашнее задание
+def hw_start(update, context):
+    update.message.reply_text("📝 Введи название предмета:", reply_markup=ReplyKeyboardRemove())
+    return HW_SUBJECT
+
+def hw_subject(update, context):
+    context.user_data['hw_subj'] = update.message.text
+    update.message.reply_text("📖 Опиши задание:")
+    return HW_TASK
+
+def hw_task(update, context):
+    context.user_data['hw_task'] = update.message.text
+    update.message.reply_text("⏰ Введи дедлайн в формате: ГГГГ-ММ-ДД ЧЧ:ММ\nПример: 2025-05-20 23:59")
+    return HW_DEADLINE
+
+def hw_deadline(update, context):
+    try:
+        deadline = datetime.strptime(update.message.text, "%Y-%m-%d %H:%M")
+        save_homework(
+            update.effective_user.id,
+            context.user_data['hw_subj'],
+            context.user_data['hw_task'],
+            deadline.strftime("%Y-%m-%d %H:%M:%S")
         )
-        return HW_SUBJECT
-
-    async def hw_subject(self, update, context):
-        if update.message.text.startswith('/'):
-            await update.message.reply_text("❌ Команда не доступна. Напиши /cancel для выхода.")
-            return HW_SUBJECT
-        
-        context.user_data['hw_subj'] = update.message.text
-        await update.message.reply_text("📖 Опиши задание (что нужно сделать):")
-        return HW_TASK
-
-    async def hw_task(self, update, context):
-        if update.message.text.startswith('/'):
-            await update.message.reply_text("❌ Команда не доступна. Напиши /cancel для выхода.")
-            return HW_TASK
-        
-        context.user_data['hw_task'] = update.message.text
-        await update.message.reply_text(
-            "⏰ *Введи дедлайн:*\n\n"
-            "Варианты:\n"
-            "• `2025-05-20 23:59`\n"
-            "• `завтра 18:00`\n"
-            "• `20.05.2025 23:59`",
-            parse_mode="Markdown"
-        )
+        update.message.reply_text(f"✅ Домашнее задание добавлено!\n\n📚 {context.user_data['hw_subj']}\n📝 {context.user_data['hw_task']}\n⏰ {deadline.strftime('%d.%m.%Y %H:%M')}")
+    except:
+        update.message.reply_text("❌ Неправильный формат. Попробуй: 2025-05-20 23:59")
         return HW_DEADLINE
+    context.user_data.clear()
+    return ConversationHandler.END
 
-    async def hw_deadline(self, update, context):
-        text = update.message.text.strip().lower()
-        
-        try:
-            # Обработка "завтра"
-            if "завтра" in text:
-                parts = text.split()
-                time_str = parts[-1]
-                time_parts = time_str.split(':')
-                d = datetime.now() + timedelta(days=1)
-                deadline = d.replace(
-                    hour=int(time_parts[0]),
-                    minute=int(time_parts[1]),
-                    second=0,
-                    microsecond=0
-                )
-            else:
-                # Попробуем разные форматы
-                for fmt in ["%Y-%m-%d %H:%M", "%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M:%S"]:
-                    try:
-                        deadline = datetime.strptime(text, fmt)
-                        break
-                    except ValueError:
-                        continue
-                else:
-                    raise ValueError("Неверный формат даты")
-            
-            # Сохраняем в БД
-            self.db.save_homework(
-                update.effective_user.id,
-                context.user_data['hw_subj'],
-                context.user_data['hw_task'],
-                deadline.strftime("%Y-%m-%d %H:%M:%S")
-            )
-            
-            await update.message.reply_text(
-                f"✅ *Домашнее задание добавлено!*\n\n"
-                f"📚 Предмет: {context.user_data['hw_subj']}\n"
-                f"📝 Задание: {context.user_data['hw_task']}\n"
-                f"⏰ Дедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n\n"
-                f"Посмотреть все задания: /all_homework",
-                parse_mode="Markdown"
-            )
-            
-        except Exception as e:
-            await update.message.reply_text(
-                f"❌ *Ошибка:* неправильный формат даты.\n\n"
-                f"*Правильные примеры:*\n"
-                f"• `2025-05-20 23:59`\n"
-                f"• `20.05.2025 23:59`\n"
-                f"• `завтра 18:00`",
-                parse_mode="Markdown"
-            )
-            return HW_DEADLINE
-        
-        context.user_data.clear()
-        return ConversationHandler.END
+def cancel(update, context):
+    update.message.reply_text("❌ Отменено", reply_markup=ReplyKeyboardRemove())
+    context.user_data.clear()
+    return ConversationHandler.END
 
-    async def cancel(self, update, context):
-        """Отмена текущего действия"""
-        context.user_data.clear()
-        await update.message.reply_text(
-            "❌ Действие отменено",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return ConversationHandler.END
-
-    async def check_deadlines(self, context: ContextTypes.DEFAULT_TYPE):
-        """Проверка дедлайнов (запускается каждый день в 9:00)"""
-        now = datetime.now()
-        tomorrow = now + timedelta(days=1)
-        
-        # Ищем задания с дедлайном завтра
-        self.db.cursor.execute("""
-            SELECT user_id, subject, task, deadline 
-            FROM homework 
-            WHERE date(deadline) = date(?)
-            AND is_notified = 0
-        """, (tomorrow.strftime("%Y-%m-%d"),))
-        
-        homeworks = self.db.cursor.fetchall()
-        
-        for hw in homeworks:
-            user_id, subject, task, deadline = hw
-            deadline_dt = datetime.strptime(deadline, "%Y-%m-%d %H:%M:%S")
-            
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"⚠️ *НАПОМИНАНИЕ О ДЕДЛАЙНЕ!* ⚠️\n\n"
-                         f"📚 Предмет: {subject}\n"
-                         f"📝 Задание: {task}\n"
-                         f"⏰ Дедлайн: {deadline_dt.strftime('%d.%m.%Y в %H:%M')}\n\n"
-                         f"❕ Остался 1 день!",
-                    parse_mode="Markdown"
-                )
-                
-                # Помечаем как уведомленное
-                self.db.cursor.execute("""
-                    UPDATE homework 
-                    SET is_notified = 1 
-                    WHERE user_id = ? AND subject = ? AND deadline = ?
-                """, (user_id, subject, deadline))
-                self.db.conn.commit()
-                
-                logging.info(f"Уведомление отправлено пользователю {user_id} о задании {subject}")
-                
-            except Exception as e:
-                logging.error(f"Ошибка отправки уведомления: {e}")
-
-    def run(self):
-        """Запуск бота"""
-        async def post_init(application):
-            # Удаляем webhook
-            await application.bot.delete_webhook(drop_pending_updates=True)
-            logging.info("✅ Webhook удалён")
-            
-            # Настраиваем планировщик уведомлений
-            job_queue = application.job_queue
-            if job_queue:
-                # Запускаем проверку каждый день в 9:00
-                job_queue.run_daily(
-                    self.check_deadlines,
-                    time=datetime.time(hour=9, minute=0),
-                    days=tuple(range(7))
-                )
-                logging.info("✅ Планировщик уведомлений запущен (каждый день в 9:00)")
-        
-        # Устанавливаем post_init
-        self.app.post_init = post_init
-        
-        # Запускаем бота
-        logging.info("=" * 50)
-        logging.info("🤖 БОТ ЗАПУЩЕН! 🚀")
-        logging.info("=" * 50)
-        
-        self.app.run_polling()
+def main():
+    token = os.environ.get("TOKEN")
+    if not token:
+        print("❌ Ошибка: токен не найден")
+        return
+    
+    updater = Updater(token, use_context=True)
+    dp = updater.dispatcher
+    
+    # Команды
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("schedule", schedule_today))
+    dp.add_handler(CommandHandler("all_schedule", all_schedule))
+    dp.add_handler(CommandHandler("all_homework", all_homework))
+    
+    # Диалоги
+    dp.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("add_schedule", add_schedule_start)],
+        states={
+            ADD_SCHEDULE_WEEK: [MessageHandler(Filters.text & ~Filters.command, add_schedule_week)],
+            ADD_SCHEDULE_DAY: [MessageHandler(Filters.text & ~Filters.command, add_schedule_day)],
+            ADD_SCHEDULE_SUBJECT: [MessageHandler(Filters.text & ~Filters.command, add_schedule_subject)],
+            ADD_SCHEDULE_TIME: [MessageHandler(Filters.text & ~Filters.command, add_schedule_time)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+    
+    dp.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("batch_schedule", batch_start)],
+        states={
+            BATCH_WEEK: [MessageHandler(Filters.text & ~Filters.command, batch_week)],
+            BATCH_ADD: [MessageHandler(Filters.text & ~Filters.command, batch_add)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+    
+    dp.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("delete_schedule", delete_start)],
+        states={DELETE_CHOOSE: [MessageHandler(Filters.text & ~Filters.command, delete_choose)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+    
+    dp.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("add_homework", hw_start)],
+        states={
+            HW_SUBJECT: [MessageHandler(Filters.text & ~Filters.command, hw_subject)],
+            HW_TASK: [MessageHandler(Filters.text & ~Filters.command, hw_task)],
+            HW_DEADLINE: [MessageHandler(Filters.text & ~Filters.command, hw_deadline)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+    
+    print("🤖 БОТ ЗАПУЩЕН!")
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
-    TOKEN = "8278536077:AAG0GOWYolKbdEmy4sHMWCaa4SRsWfbg6wI"
-    if not TOKEN:
-        print("❌ Ошибка: токен не найден")
-        print("Установи переменную окружения TOKEN")
-        print("Или запусти так: TOKEN=ваш_токен python bot.py")
-    else:
-        bot = ScheduleBot(TOKEN)
-        bot.run()
+    main()
