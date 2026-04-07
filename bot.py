@@ -16,6 +16,7 @@ ADD_SCHEDULE_WEEK, ADD_SCHEDULE_DAY, ADD_SCHEDULE_SUBJECT, ADD_SCHEDULE_TIME = r
 BATCH_WEEK, BATCH_ADD = range(4, 6)
 DELETE_CHOOSE = 6
 HW_SUBJECT, HW_TASK, HW_DEADLINE = range(7, 10)
+COPY_WEEK = 10
 
 DAYS_RU = {
     0: "Понедельник", 1: "Вторник", 2: "Среда",
@@ -66,6 +67,29 @@ def get_homeworks(user_id):
         return []
     return homework_store[user_id]
 
+def copy_week_schedule(user_id, from_week, to_week):
+    """Копирует расписание с одной недели на другую"""
+    if user_id not in schedule_store:
+        return 0
+    
+    copied = 0
+    # Находим все пары с исходной недели
+    for s in schedule_store[user_id]:
+        if s['week_type'] == from_week:
+            # Проверяем, нет ли уже такой пары на целевой неделе
+            exists = False
+            for existing in schedule_store[user_id]:
+                if (existing['week_type'] == to_week and 
+                    existing['day'] == s['day'] and 
+                    existing['time'] == s['time'] and 
+                    existing['subject'] == s['subject']):
+                    exists = True
+                    break
+            if not exists:
+                save_schedule(user_id, to_week, s['day'], s['subject'], s['time'])
+                copied += 1
+    return copied
+
 # Команды
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -73,6 +97,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📚 /add_schedule - добавить одну пару
 📚 /batch_schedule - добавить несколько пар за раз
+📋 /copy_schedule - скопировать расписание с одной недели на другую
 🗑 /delete_schedule - удалить пару
 📝 /add_homework - добавить домашнее задание
 📋 /all_homework - все домашние задания
@@ -128,6 +153,56 @@ async def all_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status = f"📅 {deadline.strftime('%d.%m.%Y')}"
         msg += f"📚 {hw['subject']}\n📝 {hw['task']}\n⏰ {status} {deadline.strftime('%H:%M')}\n\n"
     await update.message.reply_text(msg)
+
+# Копирование расписания
+async def copy_schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [["Четная → Нечетная", "Нечетная → Четная"]]
+    await update.message.reply_text(
+        "Выбери направление копирования:",
+        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+    )
+    return COPY_WEEK
+
+async def copy_schedule_choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    user_id = update.effective_user.id
+    
+    if text == "Четная → Нечетная":
+        from_week = "even"
+        to_week = "odd"
+        from_name = "Четной"
+        to_name = "Нечетную"
+    elif text == "Нечетная → Четная":
+        from_week = "odd"
+        to_week = "even"
+        from_name = "Нечетной"
+        to_name = "Четную"
+    else:
+        await update.message.reply_text("Пожалуйста, нажми на кнопку")
+        return COPY_WEEK
+    
+    copied = copy_week_schedule(user_id, from_week, to_week)
+    
+    if copied == 0:
+        # Проверяем, есть ли вообще пары на исходной неделе
+        has_pairs = False
+        for d in range(7):
+            if get_schedule(user_id, from_week, d):
+                has_pairs = True
+                break
+        
+        if not has_pairs:
+            await update.message.reply_text(f"❌ На {from_name} неделе нет пар для копирования.")
+        else:
+            await update.message.reply_text(f"ℹ️ Все пары с {from_name} недели уже есть на {to_name} неделе. Ничего не скопировано.")
+    else:
+        await update.message.reply_text(
+            f"✅ Скопировано {copied} пар(ы) с {from_name} недели на {to_name} неделю.\n\n"
+            f"Посмотреть результат: /all_schedule"
+        )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
 
 # Добавление одной пары
 async def add_schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -320,6 +395,13 @@ def main():
     app.add_handler(CommandHandler("schedule", schedule_today))
     app.add_handler(CommandHandler("all_schedule", all_schedule))
     app.add_handler(CommandHandler("all_homework", all_homework))
+    
+    # Копирование расписания
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("copy_schedule", copy_schedule_start)],
+        states={COPY_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, copy_schedule_choose)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
     
     # Диалоги
     app.add_handler(ConversationHandler(
