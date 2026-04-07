@@ -11,11 +11,13 @@ import database
 
 logging.basicConfig(level=logging.INFO)
 
-# Состояния
-WEEK_TYPE, DAY, SUBJECT, TIME = range(4)
-HW_SUBJECT, HW_TASK, HW_DEADLINE = range(4, 7)
-BATCH_WEEK, BATCH_ADD = range(7, 9)
-DELETE_CHOOSE = range(9, 10)
+# Состояния — ОНИ ДОЛЖНЫ БЫТЬ УНИКАЛЬНЫМИ
+(
+    ADD_SCHEDULE_WEEK, ADD_SCHEDULE_DAY, ADD_SCHEDULE_SUBJECT, ADD_SCHEDULE_TIME,
+    BATCH_WEEK, BATCH_ADD,
+    DELETE_CHOOSE,
+    HW_SUBJECT, HW_TASK, HW_DEADLINE
+) = range(10)
 
 DAYS_RU = {
     0: "Понедельник", 1: "Вторник", 2: "Среда",
@@ -30,25 +32,26 @@ class ScheduleBot:
         self.setup_handlers()
 
     def setup_handlers(self):
+        # Простые команды
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CommandHandler("schedule", self.schedule_today))
         self.app.add_handler(CommandHandler("all_schedule", self.all_schedule))
-        self.app.add_handler(CommandHandler("all_homework", self.all_homework))  # НОВАЯ КОМАНДА
+        self.app.add_handler(CommandHandler("all_homework", self.all_homework))
 
-        # Добавление одной пары
+        # Добавление ОДНОЙ пары
         self.app.add_handler(ConversationHandler(
-            entry_points=[CommandHandler("add_schedule", self.add_one_start)],
+            entry_points=[CommandHandler("add_schedule", self.add_schedule_start)],
             states={
-                WEEK_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_one_week)],
-                DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_one_day)],
-                SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_one_subject)],
-                TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_one_time)],
+                ADD_SCHEDULE_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_schedule_week)],
+                ADD_SCHEDULE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_schedule_day)],
+                ADD_SCHEDULE_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_schedule_subject)],
+                ADD_SCHEDULE_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.add_schedule_time)],
             },
             fallbacks=[CommandHandler("cancel", self.cancel)],
             allow_reentry=True
         ))
 
-        # Добавление нескольких пар
+        # Добавление НЕСКОЛЬКИХ пар
         self.app.add_handler(ConversationHandler(
             entry_points=[CommandHandler("batch_schedule", self.batch_start)],
             states={
@@ -67,7 +70,7 @@ class ScheduleBot:
             allow_reentry=True
         ))
 
-        # Домашнее задание
+        # ДОМАШНЕЕ ЗАДАНИЕ
         self.app.add_handler(ConversationHandler(
             entry_points=[CommandHandler("add_homework", self.hw_start)],
             states={
@@ -87,7 +90,7 @@ class ScheduleBot:
 📚 /batch_schedule - добавить несколько пар за раз
 🗑 /delete_schedule - удалить пару
 📝 /add_homework - добавить домашнее задание
-📋 /all_homework - посмотреть все домашние задания
+📋 /all_homework - все домашние задания
 📅 /schedule - расписание на сегодня
 📖 /all_schedule - всё расписание
 ❌ /cancel - отменить действие"""
@@ -120,7 +123,6 @@ class ScheduleBot:
                 msg += "   (нет пар)\n"
         await update.message.reply_text(msg)
 
-    # ========== ВСЕ ДОМАШНИЕ ЗАДАНИЯ ==========
     async def all_homework(self, update, context):
         user_id = update.effective_user.id
         homeworks = self.db.get_all_homeworks_for_user(user_id)
@@ -131,15 +133,11 @@ class ScheduleBot:
         
         msg = "📋 **ВСЕ ДОМАШНИЕ ЗАДАНИЯ**\n\n"
         
-        # Сортируем по дедлайну
-        homeworks.sort(key=lambda x: x[4])
-        
         for hw in homeworks:
             hw_id, user_id, subject, task, deadline_str, is_notified = hw
             deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M:%S")
             now = datetime.now()
             
-            # Определяем статус
             if deadline < now:
                 status = "❌ ПРОСРОЧЕНО"
             elif (deadline - now).days == 0:
@@ -152,36 +150,33 @@ class ScheduleBot:
             msg += f"**{subject}**\n"
             msg += f"📝 {task}\n"
             msg += f"⏰ {status} {deadline.strftime('%H:%M')}\n"
-            msg += f"🆔 #{hw_id}\n"
             msg += "\n" + "─"*20 + "\n\n"
-        
-        msg += "🗑 Для удаления задания напиши: /delete_homework [ID]"
         
         await update.message.reply_text(msg, parse_mode="Markdown")
 
     # ========== ДОБАВЛЕНИЕ ОДНОЙ ПАРЫ ==========
-    async def add_one_start(self, update, context):
+    async def add_schedule_start(self, update, context):
         kb = [["Четная неделя", "Нечетная неделя"]]
         await update.message.reply_text("Выбери тип недели:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-        return WEEK_TYPE
+        return ADD_SCHEDULE_WEEK
 
-    async def add_one_week(self, update, context):
+    async def add_schedule_week(self, update, context):
         context.user_data['week'] = "even" if update.message.text == "Четная неделя" else "odd"
         kb = [[d] for d in DAYS_RU.values()]
         await update.message.reply_text("Выбери день:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-        return DAY
+        return ADD_SCHEDULE_DAY
 
-    async def add_one_day(self, update, context):
+    async def add_schedule_day(self, update, context):
         context.user_data['day'] = DAYS_EN[update.message.text]
         await update.message.reply_text("Название предмета:", reply_markup=ReplyKeyboardRemove())
-        return SUBJECT
+        return ADD_SCHEDULE_SUBJECT
 
-    async def add_one_subject(self, update, context):
+    async def add_schedule_subject(self, update, context):
         context.user_data['subject'] = update.message.text
         await update.message.reply_text("Время (например: 10:30):")
-        return TIME
+        return ADD_SCHEDULE_TIME
 
-    async def add_one_time(self, update, context):
+    async def add_schedule_time(self, update, context):
         self.db.save_schedule(
             update.effective_user.id,
             context.user_data['week'],
@@ -219,7 +214,7 @@ class ScheduleBot:
         text = update.message.text
         
         if text == "/done":
-            await update.message.reply_text("✅ Готово! Теперь можно добавить другую неделю или использовать другие команды.")
+            await update.message.reply_text("✅ Готово!")
             context.user_data.clear()
             return ConversationHandler.END
 
@@ -236,7 +231,7 @@ class ScheduleBot:
                 self.db.save_schedule(update.effective_user.id, week, DAYS_EN[m.group(1)], m.group(3), m.group(2))
                 saved += 1
         
-        await update.message.reply_text(f"✅ Сохранено пар: {saved}\n\nЕсли хочешь добавить ещё пары для ЭТОЙ же недели — введи их сейчас.\nЕсли закончил — напиши /done")
+        await update.message.reply_text(f"✅ Сохранено пар: {saved}\n\nЕсли закончил — напиши /done")
         return BATCH_ADD
 
     # ========== УДАЛЕНИЕ ПАРЫ ==========
@@ -284,7 +279,7 @@ class ScheduleBot:
 
     async def hw_task(self, update, context):
         context.user_data['hw_task'] = update.message.text
-        await update.message.reply_text("⏰ Введи дедлайн в формате:\nГГГГ-ММ-ДД ЧЧ:ММ\n\nНапример: 2025-05-20 23:59\n\nИли напиши 'завтра 18:00'")
+        await update.message.reply_text("⏰ Введи дедлайн:\n\nГГГГ-ММ-ДД ЧЧ:ММ\nНапример: 2025-05-20 23:59\n\nИли: завтра 18:00")
         return HW_DEADLINE
 
     async def hw_deadline(self, update, context):
@@ -309,7 +304,6 @@ class ScheduleBot:
                 f"📚 Предмет: {context.user_data['hw_subj']}\n"
                 f"📝 Задание: {context.user_data['hw_task']}\n"
                 f"⏰ Дедлайн: {deadline.strftime('%d.%m.%Y %H:%M')}\n\n"
-                f"Я напомню за день до сдачи!\n"
                 f"Посмотреть все задания: /all_homework"
             )
         except Exception as e:
@@ -334,6 +328,7 @@ class ScheduleBot:
         print("=" * 40)
         print("Команды:")
         print("  /start - приветствие")
+        print("  /add_schedule - добавить одну пару")
         print("  /batch_schedule - добавить несколько пар")
         print("  /delete_schedule - удалить пару")
         print("  /add_homework - добавить задание")
