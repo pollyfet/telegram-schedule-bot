@@ -28,21 +28,12 @@ schedule_store = {}
 homework_store = {}
 
 def get_current_week():
-    """
-    Определяет четная/нечетная неделя.
-    Правило: неделя, в которой находится 6 апреля 2026 - четная.
-    """
     today = datetime.now()
     start = datetime(2026, 4, 6)
-    
-    # Находим понедельник текущей недели
     days_since_monday = today.weekday()
     current_monday = today - timedelta(days=days_since_monday)
-    
-    # Разница в днях между понедельниками
     days_diff = (current_monday - start).days
     week_number = days_diff // 7
-    
     return "even" if week_number % 2 == 0 else "odd"
 
 def save_schedule(user_id, week_type, day, subject, time):
@@ -102,38 +93,6 @@ def copy_week_schedule(user_id, from_week, to_week):
                 save_schedule(user_id, to_week, s['day'], s['subject'], s['time'])
                 copied += 1
     return copied
-
-async def send_pending_notifications(app):
-    """Отправляет все просроченные и срочные уведомления при запуске"""
-    now = datetime.now()
-    for user_id, homeworks in homework_store.items():
-        for hw in homeworks:
-            if not hw['is_notified']:
-                deadline = datetime.strptime(hw['deadline'], "%Y-%m-%d %H:%M:%S")
-                days_left = (deadline - now).days
-                
-                # Отправляем уведомление если:
-                # 1. Дедлайн сегодня
-                # 2. Дедлайн завтра
-                # 3. Дедлайн просрочен (но не отправляли)
-                if days_left <= 1:
-                    try:
-                        if days_left == 1:
-                            text = f"⚠️ *НАПОМИНАНИЕ!*\n\nДедлайн по заданию \"{hw['subject']}\" ЗАВТРА!\n\n📝 {hw['task']}"
-                        elif days_left == 0:
-                            text = f"⚠️ *СРОЧНО!*\n\nДедлайн по заданию \"{hw['subject']}\" СЕГОДНЯ!\n\n📝 {hw['task']}"
-                        else:
-                            text = f"❌ *ПРОСРОЧЕНО!*\n\nЗадание \"{hw['subject']}\" должно было быть сдано {deadline.strftime('%d.%m.%Y в %H:%M')}\n\n📝 {hw['task']}"
-                        
-                        await app.bot.send_message(
-                            chat_id=user_id,
-                            text=text,
-                            parse_mode="Markdown"
-                        )
-                        hw['is_notified'] = True
-                        logging.info(f"Уведомление отправлено пользователю {user_id} о задании {hw['subject']}")
-                    except Exception as e:
-                        logging.error(f"Ошибка отправки уведомления: {e}")
 
 # ==================== КОМАНДЫ ====================
 
@@ -211,7 +170,6 @@ async def all_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"*{hw['subject']}*\n📝 {hw['task']}\n⏰ {status} {deadline.strftime('%H:%M')}\n\n"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-# Копирование расписания
 async def copy_schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [["Четная → Нечетная", "Нечетная → Четная"]]
     await update.message.reply_text(
@@ -474,7 +432,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def check_deadlines(context: ContextTypes.DEFAULT_TYPE):
-    """Ежедневная проверка дедлайнов"""
     now = datetime.now()
     for user_id, homeworks in homework_store.items():
         for hw in homeworks:
@@ -499,6 +456,14 @@ async def check_deadlines(context: ContextTypes.DEFAULT_TYPE):
                         logging.info(f"Уведомление отправлено пользователю {user_id} о задании {hw['subject']}")
                     except Exception as e:
                         logging.error(f"Ошибка отправки уведомления: {e}")
+
+async def post_init(application: Application):
+    """Выполняется после инициализации бота"""
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    logging.info("Бот запущен, webhook удален")
+    
+    # Отправляем уведомления о просроченных заданиях
+    await check_deadlines(application)
 
 def main():
     token = os.environ.get("TOKEN")
@@ -561,19 +526,17 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
     
-    # Планировщик уведомлений (каждый час для надежности)
+    # Планировщик уведомлений (каждый час)
     job_queue = app.job_queue
     if job_queue:
-        # Проверка каждый час с 8 до 22
         job_queue.run_repeating(check_deadlines, interval=3600, first=10)
+    
+    # Post init
+    app.post_init = post_init
     
     print("🤖 БОТ ЗАПУЩЕН!")
     print(f"📅 Сегодня: {datetime.now().strftime('%d.%m.%Y')}")
     print(f"📅 Текущая неделя: {'ЧЕТНАЯ' if get_current_week() == 'even' else 'НЕЧЕТНАЯ'}")
-    
-    # Отправляем уведомления при запуске
-    import asyncio
-    asyncio.run(send_pending_notifications(app))
     
     app.run_polling()
 
