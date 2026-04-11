@@ -2,10 +2,10 @@ import os
 import logging
 import re
 from datetime import datetime, timedelta
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ConversationHandler, ContextTypes, filters, CallbackQueryHandler
+    ConversationHandler, ContextTypes, filters
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -67,7 +67,7 @@ def save_homework(user_id, subject, task, deadline):
         'subject': subject,
         'task': task,
         'deadline': deadline,
-        'is_completed': False,  # НЕ ВЫПОЛНЕНО
+        'is_completed': False,
         'is_notified': False
     })
 
@@ -127,7 +127,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /completed_homework - выполненные задания
 /schedule - расписание на сегодня
 /all_schedule - всё расписание
-/cancel - отменить действие"""
+/cancel - отменить действие
+
+В режиме batch_schedule используй /stop для завершения"""
     await update.message.reply_text(text)
 
 async def schedule_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,26 +297,42 @@ async def batch_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, нажми на кнопку")
         return BATCH_WEEK
     await update.message.reply_text(
-        "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\n\nКогда закончишь, напиши /done",
+        "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\n\nКогда закончишь, напиши /stop\nЧтобы отменить, напиши /cancel",
         reply_markup=ReplyKeyboardRemove()
     )
     return BATCH_ADD
 
 async def batch_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    if text.lower() == "/done":
-        await update.message.reply_text("✅ Готово!")
+    
+    # Выход из режима - используем /stop вместо /done
+    if text.lower() == "/stop":
+        await update.message.reply_text("✅ Добавление пар завершено!")
         context.user_data.clear()
         return ConversationHandler.END
     
     if text.lower() == "/cancel":
-        await update.message.reply_text("❌ Отменено")
+        await update.message.reply_text("❌ Добавление пар отменено")
         context.user_data.clear()
         return ConversationHandler.END
+    
+    # Защита от других команд
+    if text.startswith("/"):
+        await update.message.reply_text(
+            f"⚠️ Вы в режиме добавления пар.\n\n"
+            f"Доступно:\n"
+            f"• /stop - завершить добавление\n"
+            f"• /cancel - отменить\n\n"
+            f"Или введите пары в формате:\n"
+            f"Понедельник 10:30 Математика"
+        )
+        return BATCH_ADD
     
     lines = text.split('\n')
     saved = 0
     week = context.user_data.get('batch_week', 'even')
+    errors = []
+    
     for line in lines:
         line = line.strip()
         if not line:
@@ -323,10 +341,22 @@ async def batch_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if match and match.group(1) in DAYS_EN:
             save_schedule(update.effective_user.id, week, DAYS_EN[match.group(1)], match.group(3), match.group(2))
             saved += 1
+        else:
+            errors.append(line)
+    
     if saved == 0:
-        await update.message.reply_text("❌ Не распознано ни одной пары\nФормат: ДЕНЬ ВРЕМЯ ПРЕДМЕТ\nПример: Понедельник 10:30 Математика")
+        await update.message.reply_text(
+            f"❌ Не распознано ни одной пары\n\n"
+            f"Формат: ДЕНЬ ВРЕМЯ ПРЕДМЕТ\n"
+            f"Пример: Понедельник 10:30 Математика\n\n"
+            f"Напиши /stop для выхода"
+        )
     else:
-        await update.message.reply_text(f"✅ Сохранено пар: {saved}\n\nЕсли закончил — напиши /done")
+        await update.message.reply_text(
+            f"✅ Сохранено пар: {saved}\n\n"
+            f"Можно добавить ещё или написать /stop для завершения."
+        )
+    
     return BATCH_ADD
 
 # ==================== УДАЛЕНИЕ ПАРЫ ====================
@@ -546,7 +576,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
     
-    # Добавление нескольких пар
+    # Добавление нескольких пар - используем /stop для завершения
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("batch_schedule", batch_start)],
         states={
