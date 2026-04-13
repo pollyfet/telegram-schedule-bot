@@ -93,7 +93,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Сейчас {week_name} неделя
 
-📚 /batch_schedule - добавить расписание (несколько пар)
+📚 /batch_schedule - добавить расписание (несколько пар за раз)
 📝 /add_homework - добавить домашнее задание
 📋 /all_homework - все активные задания
 ✅ /done N - отметить задание выполненным
@@ -176,7 +176,7 @@ async def handle_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data.clear()
 
-# ==================== BATCH SCHEDULE (ОСНОВНАЯ ФУНКЦИЯ) ====================
+# ==================== BATCH SCHEDULE (МНОЖЕСТВЕННЫЙ ВВОД) ====================
 
 async def batch_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало добавления расписания - выбор недели"""
@@ -204,9 +204,10 @@ async def week_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"📝 Добавление пар на {week_name} неделю\n\n"
-        "Вводи пары по одной в формате:\n"
-        "`ДЕНЬ ВРЕМЯ ПРЕДМЕТ`\n\n"
-        "Пример: Понедельник 10:30 Математика\n\n"
+        "Введи ВСЕ пары одним сообщением, КАЖДАЯ С НОВОЙ СТРОКИ:\n\n"
+        "`Понедельник 10:30 Математика\n"
+        "Вторник 14:00 Физика\n"
+        "Среда 12:00 Химия`\n\n"
         "Когда закончишь, напиши /stop\n"
         "Чтобы отменить, напиши /cancel",
         parse_mode="Markdown",
@@ -215,7 +216,7 @@ async def week_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PAIRS_INPUT
 
 async def pairs_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ввода пар"""
+    """Обработка ввода нескольких пар (одним сообщением)"""
     text = update.message.text.strip()
     
     # Завершение
@@ -237,25 +238,42 @@ async def pairs_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Напиши /stop для завершения или /cancel для отмены")
         return PAIRS_INPUT
     
-    # Парсинг пары
-    match = re.match(r'^([А-Яа-я]+)\s+(\d{1,2}:\d{2})\s+(.+)$', text)
+    # Разбиваем на строки и обрабатываем каждую
+    lines = text.split('\n')
+    week_type = context.user_data.get('week_type', 'even')
+    week_name = "ЧЕТНУЮ" if week_type == "even" else "НЕЧЕТНУЮ"
     
-    if match and match.group(1) in DAYS_EN:
-        day = DAYS_EN[match.group(1)]
-        time = match.group(2)
-        subject = match.group(3)
-        week_type = context.user_data.get('week_type', 'even')
+    saved = 0
+    errors = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
         
-        save_schedule(update.effective_user.id, week_type, day, subject, time)
-        
-        week_name = "ЧЕТНУЮ" if week_type == "even" else "НЕЧЕТНУЮ"
-        await update.message.reply_text(f"✅ Добавлено на {week_name} неделю: {match.group(1)} {time} - {subject}")
-    else:
+        match = re.match(r'^([А-Яа-я]+)\s+(\d{1,2}:\d{2})\s+(.+)$', line)
+        if match and match.group(1) in DAYS_EN:
+            day = DAYS_EN[match.group(1)]
+            time = match.group(2)
+            subject = match.group(3)
+            save_schedule(update.effective_user.id, week_type, day, subject, time)
+            saved += 1
+        else:
+            errors.append(line)
+    
+    if saved == 0:
         await update.message.reply_text(
-            "❌ Не распознано. Формат: ДЕНЬ ВРЕМЯ ПРЕДМЕТ\n"
+            "❌ Не распознано ни одной пары\n\n"
+            "Формат каждой строки: ДЕНЬ ВРЕМЯ ПРЕДМЕТ\n"
             "Пример: Понедельник 10:30 Математика\n\n"
             "Напиши /stop для завершения"
         )
+    else:
+        msg = f"✅ Сохранено {saved} пар на {week_name} неделю"
+        if errors:
+            msg += f"\n\n⚠️ Не распознано:\n" + "\n".join(errors[:3])
+        msg += "\n\nМожно добавить ещё или напиши /stop"
+        await update.message.reply_text(msg)
     
     return PAIRS_INPUT
 
@@ -438,7 +456,7 @@ def main():
     )
     app.add_handler(batch_conv)
     
-    # Добавление домашнего задания (ручной режим)
+    # Добавление домашнего задания
     app.add_handler(CommandHandler("add_homework", add_homework_start))
     
     # Обработчики сообщений
