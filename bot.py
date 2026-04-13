@@ -543,13 +543,11 @@ def main():
     app.add_handler(CommandHandler("done", complete_task))
     app.add_handler(CommandHandler("cancel", cancel))
     
-    fallbacks = [CommandHandler("cancel", cancel), CommandHandler("start", start)]
-    
     # Копирование
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("copy_schedule", copy_schedule_start)],
         states={COPY_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, copy_schedule_choose)]},
-        fallbacks=fallbacks
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)]
     ))
     
     # Добавление одной пары
@@ -561,25 +559,25 @@ def main():
             ADD_SCHEDULE_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_subject)],
             ADD_SCHEDULE_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_time)],
         },
-        fallbacks=fallbacks
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)]
     ))
     
-    # Добавление нескольких пар (исправлено)
+    # Добавление нескольких пар
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("batch_schedule", batch_start)],
         states={
             BATCH_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, batch_week)],
             BATCH_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, batch_add)],
         },
-        fallbacks=fallbacks,
-        allow_reentry=True  # ВАЖНО: разрешаем повторный вход
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+        allow_reentry=True
     ))
     
     # Удаление пары
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("delete_schedule", delete_start)],
         states={DELETE_CHOOSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_choose)]},
-        fallbacks=fallbacks
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)]
     ))
     
     # Добавление домашнего задания
@@ -590,7 +588,7 @@ def main():
             HW_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, hw_task)],
             HW_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, hw_deadline)],
         },
-        fallbacks=fallbacks
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)]
     ))
     
     # Планировщик
