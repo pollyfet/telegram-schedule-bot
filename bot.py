@@ -12,9 +12,9 @@ logging.basicConfig(level=logging.INFO)
 
 # Состояния - УНИКАЛЬНЫЕ ДЛЯ КАЖДОГО ДИАЛОГА
 ADD_SCHEDULE_WEEK, ADD_SCHEDULE_DAY, ADD_SCHEDULE_SUBJECT, ADD_SCHEDULE_TIME = range(4)
-BATCH_WEEK, BATCH_ADD = range(10, 12)  # Сдвинул чтобы не пересекались
+BATCH_WEEK, BATCH_ADD = range(10, 12)
 DELETE_CHOOSE = 20
-HW_SUBJECT, HW_TASK, HW_DEADLINE = range(30, 33)  # Сдвинул чтобы не пересекались
+HW_SUBJECT, HW_TASK, HW_DEADLINE = range(30, 33)
 COPY_WEEK = 40
 
 DAYS_RU = {
@@ -524,117 +524,63 @@ def main():
     app.add_handler(CommandHandler("done", complete_task))
     app.add_handler(CommandHandler("cancel", cancel))
     
-    # Диалоги - все используют ОДНИ И ТЕ ЖЕ fallbacks
     fallbacks = [CommandHandler("cancel", cancel), CommandHandler("start", start)]
     
     # Копирование
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("copy_schedule", copy_schedule_start)],
         states={COPY_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, copy_schedule_choose)]},
-        fallbacks=fallbacksfallbacks,
-    ))
-,
+        fallbacks=fallbacks
     ))
     
-    
-    #    # Добав Добавление однойление одной пары пары
-   
-    app.add_handler( app.add_handler(ConversationHandler(
-ConversationHandler(
-        entry        entry_points_points=[CommandHandler=[CommandHandler("add_schedule("add_schedule", add", add_schedule_start)_schedule_start)],
-       ],
+    # Добавление одной пары
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("add_schedule", add_schedule_start)],
         states={
- states={
-            ADD_SCHEDULE            ADD_WEEK_SCHEDULE_WEEK:: [MessageHandler [MessageHandler(filters.TEXT & ~filters(filters.TEXT & ~filters.COMM.COMMAND,AND, add_s add_schedule_week)chedule_week)],
-            ADD_S],
-            ADD_SCHEDCHEDULE_ULE_DAY:DAY: [Message [MessageHandler(filters.TEXT &Handler(filters.TEXT & ~f ~filters.COilters.COMMANDMMAND, add, add_schedule_day)_schedule_day)],
-           ],
-            ADD_SCHED ADD_SCHEDULE_SUULE_SUBJECTBJECT:: [MessageHandler(filters [MessageHandler(filters.TEXT & ~.TEXT & ~filters.COMMAND, add_sfilters.COMMAND, add_schedule_subchedule_subject)],
-            ADDject)],
-            ADD_S_SCHEDCHEDULE_TIME:ULE_TIME [MessageHandler: [MessageHandler(filters(filters.TEXT & ~filters.TEXT & ~filters.COMM.COMMAND,AND, add_schedule_time add_schedule_time)],
+            ADD_SCHEDULE_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_week)],
+            ADD_SCHEDULE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_day)],
+            ADD_SCHEDULE_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_subject)],
+            ADD_SCHEDULE_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_schedule_time)],
         },
-)],
-        },
-        fall        fallbacks=backs=fallbacks,
-   fallbacks,
+        fallbacks=fallbacks
     ))
     
-    # ))
-    
-    # Добав Добавление несколькихление нескольких пар
- пар
-    app    app.add_handler.add_handler(Convers(ConversationHandlerationHandler(
-       (
-        entry_points entry_points=[Command=[CommandHandler("Handler("batch_sbatch_schedule", batch_startchedule", batch_start)],
-)],
+    # Добавление нескольких пар
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("batch_schedule", batch_start)],
         states={
-                   states BATCH={
-            BATCH_WEEK_WEEK:: [MessageHandler [MessageHandler(filters(filters.TEXT.TEXT & ~ & ~filters.COMMfilters.COMMAND,AND, batch_ batch_week)week)],
-           ],
-            BATCH_ADD BATCH:_ADD: [MessageHandler(filters [MessageHandler.TEXT(filters.TEXT & ~ & ~filtersfilters.COMM.COMMAND, batch_add)],
-AND, batch_add)],
+            BATCH_WEEK: [MessageHandler(filters.TEXT & ~filters.COMMAND, batch_week)],
+            BATCH_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, batch_add)],
         },
-        fallbacks=fallbacks,
+        fallbacks=fallbacks
     ))
     
-    #        },
-        fallbacks=fallbacks,
+    # Удаление пары
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("delete_schedule", delete_start)],
+        states={DELETE_CHOOSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_choose)]},
+        fallbacks=fallbacks
     ))
     
-    # Уда Удаление паление пары
-ры
-    app    app.add_handler.add_handler(Convers(ConversationHandler(
-       ationHandler entry_points(
-        entry_points=[Command=[CommandHandler("Handler("delete_sdelete_schedule",chedule", delete_start)],
- delete_start        states)],
-        states={DELETE={DELETE_CHOOSE:_CHOOSE: [Message [MessageHandler(filters.THandler(fEXT &ilters.TEXT & ~f ~filters.COMMilters.COMMANDAND, delete, delete_choose_choose)]},
-        fall)]},
-        fallbacks=backs=fallbacksfallbacks,
-    ))
-    
-,
-    ))
-    
-    #    # Добавление домаш Добавление домашнего заданиянего задания
-   
-    app.add app.add_handler(_handler(ConversationConversationHandler(
-Handler(
-        entry        entry_points=[CommandHandler_points=[CommandHandler("add("add_home_homework",work", hw hw_start)_start)],
-       ],
+    # Добавление домашнего задания
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("add_homework", hw_start)],
         states={
- states={
-            HW_SUB            HW_SUBJECT:JECT: [Message [MessageHandler(fHandler(filters.Tilters.TEXT &EXT & ~filters.CO ~filters.COMMANDMMAND, h, hw_subw_subject)ject)],
-            HW_T],
-           ASK: HW_TASK: [MessageHandler(filters [MessageHandler(filters.TEXT &.TEXT & ~f ~filters.COilters.COMMANDMMAND, hw_task)],
-, hw_task)],
-            HW            HW_DE_DEADLINEADLINE: [MessageHandler: [MessageHandler(filters(filters.TEXT.TEXT & ~ & ~filters.COMMAND, hwfilters.COMMAND, hw_dead_deadline)line)],
+            HW_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, hw_subject)],
+            HW_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, hw_task)],
+            HW_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, hw_deadline)],
         },
-       ],
-        },
-        fallbacks fallbacks=fallbacks,
-=fallbacks,
-    ))
+        fallbacks=fallbacks
     ))
     
-    # П    
-    # Планиланировщировщик
-    if app.jк
-ob_queue    if app.j:
-       ob_queue:
-        app.job_queue app.job_queue.run_repeating(check.run_repeating(check_dead_deadlines, interval=lines,3600 interval=, first3600, first=10)
+    # Планировщик
+    if app.job_queue:
+        app.job_queue.run_repeating(check_deadlines, interval=3600, first=10)
     
-=10)
-    app    
-    app.post_init.post_init = post = post_init
+    app.post_init = post_init
     
-    print_init
-    
-    print("("🤖 Б🤖 БОТОТ ЗА ЗАПУПУЩЕН!")
-   ЩЕН!")
-    app.run app.run_poll_polling()
-
-ing()
+    print("🤖 БОТ ЗАПУЩЕН!")
+    app.run_polling()
 
 if __name__ == "__main__":
-    mainif __name__ == "__main__":
     main()
