@@ -230,6 +230,8 @@ async def complete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ДОБАВЛЕНИЕ ОДНОЙ ПАРЫ ====================
 async def add_schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Принудительно очищаем данные пользователя перед началом
+    context.user_data.clear()
     kb = [["Четная неделя", "Нечетная неделя"]]
     await update.message.reply_text(
         "Выбери тип недели:",
@@ -280,6 +282,8 @@ async def add_schedule_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ДОБАВЛЕНИЕ НЕСКОЛЬКИХ ПАР ====================
 async def batch_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # КРИТИЧЕСКИ ВАЖНО: принудительно очищаем данные пользователя перед началом
+    context.user_data.clear()
     kb = [["Четная неделя", "Нечетная неделя"]]
     await update.message.reply_text(
         "Выбери тип недели:",
@@ -291,13 +295,22 @@ async def batch_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == "Четная неделя":
         context.user_data['batch_week'] = "even"
+        week_name = "ЧЕТНУЮ"
     elif text == "Нечетная неделя":
         context.user_data['batch_week'] = "odd"
+        week_name = "НЕЧЕТНУЮ"
     else:
         await update.message.reply_text("Пожалуйста, нажми на кнопку")
         return BATCH_WEEK
+    
     await update.message.reply_text(
-        "Введи пары в формате:\nДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\nПример:\nПонедельник 10:30 Математика\n\nКогда закончишь, напиши /stop\nЧтобы отменить, напиши /cancel",
+        f"📝 Начинаем добавление пар на {week_name} неделю\n\n"
+        "Введи пары в формате:\n"
+        "ДЕНЬ ВРЕМЯ ПРЕДМЕТ\n\n"
+        "Пример:\n"
+        "Понедельник 10:30 Математика\n\n"
+        "Когда закончишь, напиши /stop\n"
+        "Чтобы отменить, напиши /cancel",
         reply_markup=ReplyKeyboardRemove()
     )
     return BATCH_ADD
@@ -305,9 +318,12 @@ async def batch_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def batch_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
-    # Выход из режима - используем /stop вместо /done
+    # Выход из режима - используем /stop
     if text.lower() == "/stop":
-        await update.message.reply_text("✅ Добавление пар завершено!")
+        week_used = context.user_data.get('batch_week', 'unknown')
+        week_name = "ЧЕТНУЮ" if week_used == "even" else "НЕЧЕТНУЮ"
+        await update.message.reply_text(f"✅ Добавление пар на {week_name} неделю завершено!")
+        # ВАЖНО: полностью очищаем данные пользователя
         context.user_data.clear()
         return ConversationHandler.END
     
@@ -331,7 +347,7 @@ async def batch_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = text.split('\n')
     saved = 0
     week = context.user_data.get('batch_week', 'even')
-    errors = []
+    week_name = "ЧЕТНАЯ" if week == "even" else "НЕЧЕТНАЯ"
     
     for line in lines:
         line = line.strip()
@@ -342,7 +358,8 @@ async def batch_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_schedule(update.effective_user.id, week, DAYS_EN[match.group(1)], match.group(3), match.group(2))
             saved += 1
         else:
-            errors.append(line)
+            # Неправильный формат
+            pass
     
     if saved == 0:
         await update.message.reply_text(
@@ -353,7 +370,7 @@ async def batch_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            f"✅ Сохранено пар: {saved}\n\n"
+            f"✅ Сохранено {saved} пар(ы) на {week_name} неделю\n\n"
             f"Можно добавить ещё или написать /stop для завершения."
         )
     
@@ -393,6 +410,7 @@ async def delete_choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== КОПИРОВАНИЕ РАСПИСАНИЯ ====================
 async def copy_schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     kb = [["Четная → Нечетная", "Нечетная → Четная"]]
     await update.message.reply_text(
         "Выбери направление копирования:",
@@ -576,7 +594,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
     
-    # Добавление нескольких пар - используем /stop для завершения
+    # Добавление нескольких пар
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("batch_schedule", batch_start)],
         states={
