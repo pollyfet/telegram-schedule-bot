@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -66,7 +67,9 @@ def save_homework(user_id, subject, task, deadline):
         'task': task,
         'deadline': deadline,
         'is_completed': False,
-        'is_notified': False
+        'is_notified_24h': False,  # уведомление за 24 часа
+        'is_notified_today': False,  # уведомление в день дедлайна
+        'is_notified_overdue': False  # уведомление о просрочке
     })
 
 def get_homeworks(user_id, show_completed=False):
@@ -176,19 +179,21 @@ async def all_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for hw in homeworks:
         deadline = datetime.strptime(hw['deadline'], "%Y-%m-%d %H:%M:%S")
+        
+        # Определяем статус
         if deadline < now:
             status = "❌ ПРОСРОЧЕНО"
-        elif (deadline - now).days == 0:
-            status = "⚠️ СЕГОДНЯ"
-        elif (deadline - now).days == 1:
-            status = "⚠️ ЗАВТРА"
+        elif deadline.date() == now.date():
+            status = f"⚠️ СЕГОДНЯ {deadline.strftime('%H:%M')}"
+        elif deadline.date() == (now + timedelta(days=1)).date():
+            status = f"⚠️ ЗАВТРА {deadline.strftime('%H:%M')}"
         else:
-            status = f"📅 {deadline.strftime('%d.%m.%Y')}"
+            status = f"📅 {deadline.strftime('%d.%m.%Y %H:%M')}"
         
         msg += f"📌 #{hw['id']}\n"
         msg += f"📚 {hw['subject']}\n"
         msg += f"📝 {hw['task']}\n"
-        msg += f"⏰ {status} {deadline.strftime('%H:%M')}\n\n"
+        msg += f"⏰ {status}\n\n"
     
     await update.message.reply_text(msg)
 
@@ -218,10 +223,9 @@ async def done_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("❌ Используй: /done 1")
 
-# ==================== ДОБАВЛЕНИЕ ДОМАШНЕГО ЗАДАНИЯ (БЕЗ ДИАЛОГА) ====================
+# ==================== ДОБАВЛЕНИЕ ДОМАШНЕГО ЗАДАНИЯ ====================
 
 async def add_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Добавление домашнего задания одной командой: /add_homework Предмет | Задание | 2025-05-20 23:59"""
     if not context.args:
         await update.message.reply_text(
             "❌ Пример: /add_homework Математика | решить задачи | 2025-05-20 23:59\n\n"
@@ -246,10 +250,10 @@ async def add_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if time_match:
                 time_parts = time_match.group(1).split(':')
                 d = datetime.now() + timedelta(days=1)
-                deadline = d.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), second=0)
+                deadline = d.replace(hour=int(time_parts[0]), minute=int(time_parts[1]), second=0, microsecond=0)
             else:
                 deadline = datetime.now() + timedelta(days=1)
-                deadline = deadline.replace(hour=23, minute=59, second=0)
+                deadline = deadline.replace(hour=23, minute=59, second=0, microsecond=0)
         else:
             for fmt in ["%Y-%m-%d %H:%M", "%d.%m.%Y %H:%M"]:
                 try:
@@ -261,15 +265,25 @@ async def add_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise ValueError()
         
         save_homework(update.effective_user.id, subject, task, deadline.strftime("%Y-%m-%d %H:%M:%S"))
+        
+        # Определяем статус для ответа
+        now = datetime.now()
+        if deadline.date() == now.date():
+            status = "СЕГОДНЯ"
+        elif deadline.date() == (now + timedelta(days=1)).date():
+            status = "ЗАВТРА"
+        else:
+            status = deadline.strftime('%d.%m.%Y')
+        
         await update.message.reply_text(
             f"✅ Домашнее задание добавлено!\n\n"
             f"📚 {subject}\n"
             f"📝 {task}\n"
-            f"⏰ {deadline.strftime('%d.%m.%Y %H:%M')}\n\n"
-            f"Чтобы отметить выполненным: /done (номер из /all_homework)"
+            f"⏰ {status} {deadline.strftime('%H:%M')}\n\n"
+            f"Уведомление придёт за 24 часа до дедлайна."
         )
-    except:
-        await update.message.reply_text("❌ Неправильный формат\nПримеры:\n• 2025-05-20 23:59\n• завтра 18:00")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Неправильный формат\nПримеры:\n• 2025-05-20 23:59\n• завтра 18:00")
 
 # ==================== BATCH SCHEDULE ====================
 
@@ -434,30 +448,55 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
+# ==================== УВЕДОМЛЕНИЯ (ИСПРАВЛЕННЫЕ) ====================
+
 async def check_deadlines(context: ContextTypes.DEFAULT_TYPE):
+    """Проверка дедлайнов и отправка уведомлений"""
     now = datetime.now()
+    logging.info(f"Проверка дедлайнов: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    
     for user_id, homeworks in homework_store.items():
         for hw in homeworks:
-            if not hw['is_notified'] and not hw['is_completed']:
-                deadline = datetime.strptime(hw['deadline'], "%Y-%m-%d %H:%M:%S")
-                days_left = (deadline - now).days
-                if days_left <= 1:
-                    try:
-                        if days_left == 1:
-                            text = f"⚠️ НАПОМИНАНИЕ!\n\nДедлайн по \"{hw['subject']}\" ЗАВТРА!\n{hw['task']}"
-                        elif days_left == 0:
-                            text = f"⚠️ СРОЧНО!\n\nДедлайн по \"{hw['subject']}\" СЕГОДНЯ!\n{hw['task']}"
-                        else:
-                            text = f"❌ ПРОСРОЧЕНО!\n\n{hw['subject']}\n{hw['task']}"
-                        
-                        await context.bot.send_message(chat_id=user_id, text=text)
-                        hw['is_notified'] = True
-                    except:
-                        pass
+            if hw['is_completed']:
+                continue
+                
+            deadline = datetime.strptime(hw['deadline'], "%Y-%m-%d %H:%M:%S")
+            
+            # ПРОСРОЧЕНО
+            if deadline < now and not hw['is_notified_overdue']:
+                text = f"❌ ПРОСРОЧЕНО!\n\n📚 {hw['subject']}\n📝 {hw['task']}\n⏰ Дедлайн был {deadline.strftime('%d.%m.%Y в %H:%M')}"
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=text)
+                    hw['is_notified_overdue'] = True
+                    logging.info(f"Отправлено уведомление о просрочке для {hw['subject']}")
+                except Exception as e:
+                    logging.error(f"Ошибка отправки: {e}")
+            
+            # ДЕДЛАЙН СЕГОДНЯ
+            elif deadline.date() == now.date() and not hw['is_notified_today']:
+                text = f"⚠️ СРОЧНО!\n\nДедлайн по заданию \"{hw['subject']}\" СЕГОДНЯ в {deadline.strftime('%H:%M')}!\n\n{hw['task']}"
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=text)
+                    hw['is_notified_today'] = True
+                    logging.info(f"Отправлено уведомление о дедлайне сегодня для {hw['subject']}")
+                except Exception as e:
+                    logging.error(f"Ошибка отправки: {e}")
+            
+            # ДЕДЛАЙН ЗАВТРА (за 24 часа)
+            elif deadline.date() == (now + timedelta(days=1)).date() and not hw['is_notified_24h']:
+                text = f"⚠️ НАПОМИНАНИЕ!\n\nДедлайн по заданию \"{hw['subject']}\" ЗАВТРА в {deadline.strftime('%H:%M')}!\n\n{hw['task']}"
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=text)
+                    hw['is_notified_24h'] = True
+                    logging.info(f"Отправлено уведомление за 24 часа для {hw['subject']}")
+                except Exception as e:
+                    logging.error(f"Ошибка отправки: {e}")
 
 async def post_init(application: Application):
     await application.bot.delete_webhook(drop_pending_updates=True)
     logging.info("Бот запущен")
+    
+    # Отправляем все актуальные уведомления сразу после запуска
     await check_deadlines(application)
 
 def main():
@@ -475,7 +514,7 @@ def main():
     app.add_handler(CommandHandler("all_homework", all_homework))
     app.add_handler(CommandHandler("completed_homework", completed_homework))
     app.add_handler(CommandHandler("done", done_task))
-    app.add_handler(CommandHandler("add_homework", add_homework))  # НЕТ ДИАЛОГА!
+    app.add_handler(CommandHandler("add_homework", add_homework))
     app.add_handler(CommandHandler("delete_schedule", delete_schedule))
     app.add_handler(CommandHandler("cancel", cancel))
     
@@ -500,12 +539,14 @@ def main():
     # Обработчик удаления
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete))
     
+    # Планировщик уведомлений (каждые 30 минут для точности)
     if app.job_queue:
-        app.job_queue.run_repeating(check_deadlines, interval=3600, first=10)
+        app.job_queue.run_repeating(check_deadlines, interval=1800, first=10)
     
     app.post_init = post_init
     
     print("🤖 БОТ ЗАПУЩЕН!")
+    print("📅 Уведомления проверяются каждые 30 минут")
     app.run_polling()
 
 if __name__ == "__main__":
