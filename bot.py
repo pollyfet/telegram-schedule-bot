@@ -67,9 +67,9 @@ def save_homework(user_id, subject, task, deadline):
         'task': task,
         'deadline': deadline,
         'is_completed': False,
-        'is_notified_24h': False,  # уведомление за 24 часа
-        'is_notified_today': False,  # уведомление в день дедлайна
-        'is_notified_overdue': False  # уведомление о просрочке
+        'is_notified_24h': False,
+        'is_notified_today': False,
+        'is_notified_overdue': False
     })
 
 def get_homeworks(user_id, show_completed=False):
@@ -180,7 +180,6 @@ async def all_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for hw in homeworks:
         deadline = datetime.strptime(hw['deadline'], "%Y-%m-%d %H:%M:%S")
         
-        # Определяем статус
         if deadline < now:
             status = "❌ ПРОСРОЧЕНО"
         elif deadline.date() == now.date():
@@ -266,7 +265,6 @@ async def add_homework(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         save_homework(update.effective_user.id, subject, task, deadline.strftime("%Y-%m-%d %H:%M:%S"))
         
-        # Определяем статус для ответа
         now = datetime.now()
         if deadline.date() == now.date():
             status = "СЕГОДНЯ"
@@ -482,15 +480,18 @@ async def check_deadlines(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logging.error(f"Ошибка отправки: {e}")
             
-            # ДЕДЛАЙН ЗАВТРА (за 24 часа)
-            elif deadline.date() == (now + timedelta(days=1)).date() and not hw['is_notified_24h']:
-                text = f"⚠️ НАПОМИНАНИЕ!\n\nДедлайн по заданию \"{hw['subject']}\" ЗАВТРА в {deadline.strftime('%H:%M')}!\n\n{hw['task']}"
-                try:
-                    await context.bot.send_message(chat_id=user_id, text=text)
-                    hw['is_notified_24h'] = True
-                    logging.info(f"Отправлено уведомление за 24 часа для {hw['subject']}")
-                except Exception as e:
-                    logging.error(f"Ошибка отправки: {e}")
+            # ДЕДЛАЙН ЗАВТРА (за 24 часа) - ИСПРАВЛЕНО
+            elif not hw['is_notified_24h']:
+                time_left = (deadline - now).total_seconds()
+                # Если до дедлайна от 23 до 25 часов
+                if 82800 <= time_left <= 90000:
+                    text = f"⚠️ НАПОМИНАНИЕ!\n\nДедлайн по заданию \"{hw['subject']}\" ЗАВТРА в {deadline.strftime('%H:%M')}!\n\n{hw['task']}"
+                    try:
+                        await context.bot.send_message(chat_id=user_id, text=text)
+                        hw['is_notified_24h'] = True
+                        logging.info(f"Отправлено уведомление за 24 часа для {hw['subject']}")
+                    except Exception as e:
+                        logging.error(f"Ошибка отправки: {e}")
 
 async def post_init(application: Application):
     await application.bot.delete_webhook(drop_pending_updates=True)
@@ -539,7 +540,7 @@ def main():
     # Обработчик удаления
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete))
     
-    # Планировщик уведомлений (каждые 30 минут для точности)
+    # Планировщик уведомлений (каждые 30 минут)
     if app.job_queue:
         app.job_queue.run_repeating(check_deadlines, interval=1800, first=10)
     
